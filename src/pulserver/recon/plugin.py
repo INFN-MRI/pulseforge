@@ -384,7 +384,8 @@ class ReconPlugin(ABC):
         ``|`` route either one to the branch. The default routes
         ``LAST_IN_MEASUREMENT`` to ``"imaging"``.
     require_flags
-        Flags an acquisition must all carry to be accepted.
+        Flags an acquisition must all carry to be accepted. A combined
+        :class:`AcquisitionFlag` counts as its members.
     reject_flags
         Flags any one of which excludes an acquisition. The runtime never passes
         excluded acquisitions to :meth:`receive`.
@@ -438,8 +439,8 @@ class ReconPlugin(ABC):
             if branches is None
             else branches
         )
-        self.require_flags = tuple(require_flags)
-        self.reject_flags = tuple(reject_flags)
+        self.require_flags = _flag_members(require_flags)
+        self.reject_flags = _flag_members(reject_flags)
         self.buffered = bool(buffered)
         self.buffers = ReconData()
         self.acquisition: Any = None
@@ -631,6 +632,17 @@ def _closes(acquisition: Any, flag: Any) -> bool:
             if member in flag
         )
     return has_acquisition_flag(acquisition, flag)
+
+
+def _flag_members(flags: Any) -> tuple[Any, ...]:
+    """Return flags as a tuple, a combined :class:`AcquisitionFlag` split into its members.
+
+    The members are read from the class because iterating a combined ``Flag``
+    needs Python 3.11.
+    """
+    if isinstance(flags, AcquisitionFlag):
+        return tuple(member for member in AcquisitionFlag if member in flags)
+    return tuple(flags)
 
 
 def _last(acquisitions: tuple[Any, ...]) -> Any | None:

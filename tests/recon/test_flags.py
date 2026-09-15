@@ -4,6 +4,7 @@ import ismrmrd
 import pytest
 
 from pulserver.mrd import AcquisitionFlag, has_acquisition_flag
+from pulserver.recon.handlers.simplefft import SimpleFftRecon
 
 
 @pytest.mark.parametrize(
@@ -40,3 +41,10 @@ def test_an_integer_flag_is_a_bit_position_on_any_acquisition():
 def test_an_unknown_flag_name_is_refused():
     with pytest.raises(ValueError, match="Unknown ISMRMRD acquisition flag"):
         has_acquisition_flag(ismrmrd.Acquisition(), "NOT_A_FLAG")
+
+
+def test_a_combined_flag_is_rejected_member_by_member():
+    assert set(SimpleFftRecon().reject_flags) == {
+        AcquisitionFlag.IS_NOISE_MEASUREMENT,
+        AcquisitionFlag.IS_PHASECORR_DATA,
+    }
