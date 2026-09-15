@@ -1,5 +1,6 @@
 """Reconstruction plugin contract and the runtime that drives it over MRD streams."""
 
+from ._loader import load_plugin
 from .plugin import (
     ExamCache,
     Gadget,
@@ -18,4 +19,5 @@ __all__ = [
     "ReconData",
     "ReconPlugin",
     "ReconResult",
+    "load_plugin",
 ]
