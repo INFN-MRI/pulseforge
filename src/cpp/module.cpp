@@ -17,8 +17,10 @@
 #include <string>
 #include <vector>
 
+#include "ir/from_libraries.hpp"
 #include "pulseg.h"
 #include "pulseg_cache.h"
+#include "pulseg_convert.h"
 #include "pulseq.h"
 
 namespace py = pybind11;
@@ -405,6 +407,77 @@ PYBIND11_MODULE(_ext, module)
             return out;
         },
         "The event, shape and definition libraries of a .seq file, as the C parser reads them.");
+
+    module.def(
+        "convert_libraries",
+        [](const py::list &chain,
+           const std::string &seq_path,
+           float gamma_hz_per_t,
+           float b0_t,
+           float max_grad_hz_per_m,
+           float max_slew_hz_per_m_per_s,
+           float rf_raster_us,
+           float grad_raster_us,
+           float adc_raster_us,
+           float block_raster_us,
+           int vendor,
+           const std::array<int, 3> &label_column_map,
+           const std::string &cache_ext)
+        {
+            const pulseg_opts opts = make_opts(
+                gamma_hz_per_t,
+                b0_t,
+                max_grad_hz_per_m,
+                max_slew_hz_per_m_per_s,
+                rf_raster_us,
+                grad_raster_us,
+                adc_raster_us,
+                block_raster_us,
+                vendor,
+                label_column_map,
+                cache_ext);
+
+            const int count = static_cast<int>(chain.size());
+            if (count < 1)
+                throw std::invalid_argument("a chain holds at least one subsequence");
+            std::vector<pulseq_file> files((size_t)count);
+            for (int i = 0; i < count; ++i)
+            {
+                pulseq_file_init(&files[(size_t)i], nullptr);
+            }
+            auto release = [&files]()
+            {
+                for (auto &file : files)
+                    pulseq_file_free(&file);
+            };
+            try
+            {
+                for (int i = 0; i < count; ++i)
+                    pulserver::build_pulseq_file(
+                        files[(size_t)i], chain[(size_t)i].cast<py::dict>());
+            }
+            catch (...)
+            {
+                release();
+                throw;
+            }
+
+            Collection coll(pulseg_collection_alloc());
+            if (!coll)
+            {
+                release();
+                throw std::bad_alloc();
+            }
+            pulseg_diagnostic diag = PULSEG_DIAGNOSTIC_INIT;
+            const int converted =
+                pulseg_convert_collection(coll.get(), &diag, files.data(), count, &opts, 1);
+            release();
+            if (converted != count)
+                raise_failure(diag.code, diag);
+            if (PULSEG_FAILED(pulseg_save_cache(coll.get(), seq_path.c_str(), &opts)))
+                throw std::invalid_argument("cannot write the cache beside " + seq_path);
+        },
+        "Segment a chain read into libraries and write its IR cache beside a sequence file.");
 
     module.def(
         "parse_block_extensions",

@@ -17,7 +17,10 @@ add_compile_options($<$<COMPILE_LANGUAGE:C>:-pedantic-errors>)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/src/c ${CMAKE_BINARY_DIR}/c_build)
 
-pybind11_add_module(_ext ${CMAKE_SOURCE_DIR}/src/cpp/module.cpp)
+pybind11_add_module(_ext
+    ${CMAKE_SOURCE_DIR}/src/cpp/module.cpp
+    ${CMAKE_SOURCE_DIR}/src/cpp/ir/from_libraries.cpp
+)
 target_link_libraries(_ext PRIVATE pulseg)
 
 # Built into the build tree, never beside the sources: a binary left in the
