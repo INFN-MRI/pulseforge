@@ -104,13 +104,6 @@ def convert(
     return target
 
 
-def read_sequence(path: Path | str) -> pp.Sequence:
-    """Read one Pulseq file, text or binary, into a sequence."""
-    sequence = pp.Sequence()
-    sequence.read(Path(path))
-    return sequence
-
-
 def summary(
     seq_path: Path | str,
     system: pp.Opts,
