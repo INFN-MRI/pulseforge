@@ -1,8 +1,4 @@
-"""Shared fixtures.
-
-Every numerical check that can run on both devices is parametrised over
-``device``; the CUDA leg skips when no device is present.
-"""
+"""Shared pytest fixtures."""
 
 import pytest
 
@@ -28,5 +24,5 @@ def _cuda_available():
     ]
 )
 def device(request):
-    """Run the test on each device this machine actually has."""
+    """Device name, ``"cpu"`` or ``"cuda"``; the CUDA leg is skipped without a device."""
     return request.param

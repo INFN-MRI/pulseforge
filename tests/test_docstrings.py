@@ -1,9 +1,7 @@
-"""Every docstring example runs, against the installed package.
+"""Run every docstring example in the installed package.
 
-The examples are the documentation, so one that has drifted is a broken one.
-They are collected from the package as imported rather than from the source
-tree, so this says the same thing about an editable checkout and about an
-installed wheel.
+Modules are collected by importing the package, not with ``--doctest-modules``
+over ``src/``, which collides with a non-editable install.
 """
 
 import doctest

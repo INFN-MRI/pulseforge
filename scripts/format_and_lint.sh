@@ -13,9 +13,7 @@ check=0
 if [[ $check -eq 1 ]]; then
     "$PYTHON_BIN" -m ruff format --check .
     "$PYTHON_BIN" -m ruff check .
-    bash scripts/sync_agent_docs.sh --check
 else
     "$PYTHON_BIN" -m ruff format .
     "$PYTHON_BIN" -m ruff check --fix .
-    bash scripts/sync_agent_docs.sh
 fi
