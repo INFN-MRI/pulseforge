@@ -9,6 +9,7 @@ from typing import Any
 import pypulseqpp as pp
 
 from .._accelerators import require
+from ._source import conversion_payload
 
 
 def _limits(system: pp.Opts) -> tuple[float, ...]:
@@ -98,6 +99,51 @@ def convert(
     if not target.is_file():
         raise OSError(f"no cache was written for {seq_path}")
     return target
+
+
+def convert_sequence(
+    seq_path: Path | str,
+    system: pp.Opts,
+    *,
+    vendor: int = 0,
+    label_column_map: Sequence[int] = (0, 1, 2),
+    cache_ext: str = ".pseg",
+) -> Path:
+    """Segment a sequence read through pypulseqpp and write its IR cache beside it.
+
+    As :func:`convert`, reading the ``NextSequence`` chain with
+    ``pypulseqpp.Sequence`` instead of a Pulseq parser of its own. An existing
+    cache at the destination is replaced.
+
+    Raises
+    ------
+    ValueError
+        If a file of the chain cannot be read or segmented.
+    OSError
+        If no cache was written.
+    """
+    seq_path = Path(seq_path)
+    target = cache_path(seq_path, cache_ext)
+    target.unlink(missing_ok=True)
+    payload = [conversion_payload(read_sequence(part)) for part in chain(seq_path)]
+    require("convert_libraries")(
+        payload,
+        str(seq_path),
+        *_limits(system),
+        int(vendor),
+        list(label_column_map),
+        cache_ext,
+    )
+    if not target.is_file():
+        raise OSError(f"no cache was written for {seq_path}")
+    return target
+
+
+def read_sequence(path: Path | str) -> pp.Sequence:
+    """Read one Pulseq file, text or binary, into a sequence."""
+    sequence = pp.Sequence()
+    sequence.read(Path(path))
+    return sequence
 
 
 def summary(

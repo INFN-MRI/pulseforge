@@ -8,6 +8,7 @@ __all__ = [
     "Shape",
     "SpecificationLibraries",
     "block_extensions",
+    "conversion_payload",
     "sequence_libraries",
     "specification_libraries",
 ]
@@ -88,6 +89,17 @@ LABEL_IDS = {
     "TRID": 22,
     "OFF": 23,
 }
+
+#: Kind each extension specification is, as the converter numbers the kinds.
+_EXTENSION_KINDS = {
+    "TRIGGERS": 1,
+    "ROTATIONS": 2,
+    "LABELSET": 3,
+    "LABELINC": 4,
+    "RF_SHIMS": 5,
+    "DELAYS": 6,
+}
+
 
 #: Hint a soft delay names, as a Pulseq file numbers it; anything else is -1.
 _HINTS = {
@@ -366,11 +378,12 @@ def block_extensions(sequence: Any) -> BlockExtensions:
     blocks sharing a chain head resolve to the same thing.
     """
     core = sequence._native
+    kinds = _declared_types(core)
     heads = np.asarray(core.block_events(), dtype=np.int64)[:, 5]
     resolved = {0: _Chain()}
     for index, head in enumerate(heads):
         if int(head) not in resolved:
-            resolved[int(head)] = _resolve(core, int(head), index + 1)
+            resolved[int(head)] = _resolve(core, int(head), index + 1, kinds)
 
     count = heads.size
     labelset = {name: np.zeros(count, dtype=np.int32) for name in COUNTER_LABELS}
@@ -400,13 +413,27 @@ class _Chain:
     points: dict[str, int] = field(default_factory=dict)
 
 
-def _resolve(core: Any, head: int, block: int) -> _Chain:
+def _declared_types(core: Any) -> dict[str, int]:
+    """Return the type number the file declared for each specification it carries.
+
+    Read from the numbers the file declared rather than asked for by name:
+    asking by name mints one for a specification the file does not carry, and
+    reading a sequence does not change it.
+    """
+    declared = {
+        core.extension_type_name(number): number
+        for number in range(1, 8)
+        if core.extension_type_name(number)
+    }
+    return {name: declared.get(name, -1) for name in _EXTENSION_KINDS}
+
+
+def _resolve(core: Any, head: int, block: int, types: dict[str, int]) -> _Chain:
     """Resolve one chain: its labels from the block that plays it, its rows from the chain."""
     chain = _Chain()
     links = np.asarray(core.extension_chain(head), dtype=np.int64).reshape(2, -1)
     kinds = {
-        name: core.extension_type_id(specification)
-        for name, specification in _SPECIFICATIONS.items()
+        name: types[specification] for name, specification in _SPECIFICATIONS.items()
     }
     for name, kind in kinds.items():
         referenced = links[1][links[0] == kind]
@@ -466,13 +493,13 @@ def specification_libraries(sequence: Any) -> SpecificationLibraries:
     in.
     """
     core = sequence._native
+    types = _declared_types(core)
     heads = np.asarray(core.block_events(), dtype=np.int64)[:, 5]
     kinds = {
-        name: core.extension_type_id(specification)
-        for name, specification in _SPECIFICATIONS.items()
+        name: types[specification] for name, specification in _SPECIFICATIONS.items()
     }
-    kinds["labelset"] = core.extension_type_id("LABELSET")
-    kinds["labelinc"] = core.extension_type_id("LABELINC")
+    kinds["labelset"] = types["LABELSET"]
+    kinds["labelinc"] = types["LABELINC"]
 
     rows: dict[str, dict[int, Any]] = {name: {} for name in kinds}
     seen: set[int] = set()
@@ -576,3 +603,158 @@ def _ragged(rows: dict[int, Any]) -> tuple[NDArray[np.float64], ...]:
     return tuple(
         rows.get(identifier + 1, empty) for identifier in range(max(rows, default=0))
     )
+
+
+def conversion_payload(sequence: Any) -> dict[str, Any]:
+    """Everything one sequence file contributes to a conversion.
+
+    The libraries, the specification tables and the chain rows that link a
+    block to them, in the layout a parsed file holds: times in µs, fields of
+    view in cm, rasters in µs.
+
+    Chain rows are minted here. pypulseqpp names a block's chain by its head
+    and hands back the links it resolves to, not the rows they are stored in,
+    so the chain is written out again -- one run of rows per distinct head,
+    each block pointing at the head of its own.
+    """
+    core = sequence._native
+    libraries = sequence_libraries(sequence)
+    specifications = specification_libraries(sequence)
+    chains, heads = _chain_rows(core)
+    blocks = libraries.blocks.copy()
+    blocks[:, 6] = heads
+    rf, grad, adc, rf_use = _compact(blocks, libraries)
+    declared = core.definitions()
+
+    return {
+        "version": [
+            core.version_major(),
+            core.version_minor(),
+            core.version_revision(),
+        ],
+        "rasters": [
+            1e6 * core.rf_raster_time(),
+            1e6 * core.grad_raster_time(),
+            1e6 * core.adc_raster_time(),
+            1e6 * core.block_duration_raster(),
+        ],
+        "reserved": {
+            "fov": [100.0 * value for value in _numbers(declared, "FOV", 3)],
+            "matrix": _numbers(declared, "Matrix", 3),
+            "nav_fov": [100.0 * value for value in _numbers(declared, "NavFOV", 3)],
+            "nav_matrix": _numbers(declared, "NavMatrix", 3),
+            "total_duration": _numbers(declared, "TotalDuration", 1)[0],
+            "enable_pmc": int(_numbers(declared, "EnablePmc", 1)[0]),
+            "num_gain_cal_readouts": int(
+                _numbers(declared, "NumGainCalibrationReadouts", 1)[0]
+            ),
+            "enable_sar_burst_mode": int(
+                _numbers(declared, "EnableSarBurstMode", 1)[0]
+            ),
+            "name": str(declared.get("Name", "")),
+            "next_sequence": str(declared.get("NextSequence", "")),
+        },
+        "definitions": {name: _texts(value) for name, value in declared.items()},
+        "blocks": blocks,
+        "rf": rf,
+        "rf_use": rf_use,
+        "grad": grad,
+        "adc": adc,
+        "shapes": [
+            (shape.num_uncompressed_samples, shape.samples)
+            for shape in libraries.shapes
+        ],
+        "extensions": chains,
+        "extension_map": _extension_map(core),
+        "triggers": specifications.triggers,
+        "rotations": specifications.rotations,
+        "labelset": specifications.labelset,
+        "labelinc": specifications.labelinc,
+        "soft_delays": specifications.soft_delays,
+        "rf_shims": list(specifications.rf_shims),
+    }
+
+
+def _compact(
+    blocks: NDArray[np.float64], libraries: SequenceLibraries
+) -> tuple[Any, Any, Any, Any]:
+    """Drop the library rows no block plays, renumbering the block table in place.
+
+    A row a decoded sequence never named is not recoverable, and a placeholder
+    kept in its place would deduplicate into a definition of its own that
+    nothing plays. Numbering the played rows again keeps the libraries to what
+    the scan actually asks for.
+    """
+    rf, rf_map = _played(libraries.rf, blocks, (1,))
+    grad, grad_map = _played(libraries.grad, blocks, (2, 3, 4))
+    adc, adc_map = _played(libraries.adc, blocks, (5,))
+    uses = np.array(
+        [libraries.rf_use[old - 1] for old in sorted(rf_map, key=rf_map.get)],
+        dtype=np.int32,
+    )
+    for columns, mapping in (((1,), rf_map), ((2, 3, 4), grad_map), ((5,), adc_map)):
+        for column in columns:
+            blocks[:, column] = [
+                mapping.get(int(value), 0) for value in blocks[:, column]
+            ]
+    return rf, grad, adc, uses
+
+
+def _played(
+    library: NDArray[np.float64], blocks: NDArray[np.float64], columns: tuple[int, ...]
+) -> tuple[NDArray[np.float64], dict[int, int]]:
+    """Return the rows some block names, and what each of their ids becomes."""
+    named = sorted(
+        {int(value) for column in columns for value in blocks[:, column]} - {0}
+    )
+    mapping = {old: new for new, old in enumerate(named, start=1)}
+    if not named:
+        return library[:0], mapping
+    return library[[old - 1 for old in named]], mapping
+
+
+def _extension_map(core: Any) -> list[int]:
+    """Return the type number the file gave each kind of specification, -1 for absent."""
+    mapping = [-1] * 8
+    for name, number in _declared_types(core).items():
+        mapping[_EXTENSION_KINDS[name]] = number
+    return mapping
+
+
+def _chain_rows(core: Any) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Return the chain rows blocks point at, and the row each block starts at."""
+    heads = np.asarray(core.block_events(), dtype=np.int64)[:, 5]
+    rows: list[list[float]] = []
+    start: dict[int, int] = {}
+    for head in sorted({int(value) for value in heads} - {0}):
+        links = np.asarray(core.extension_chain(head), dtype=np.int64).reshape(2, -1)
+        start[head] = len(rows) + 1
+        for position in range(links.shape[1]):
+            last = position + 1 == links.shape[1]
+            rows.append(
+                [
+                    float(links[0, position]),
+                    float(links[1, position]),
+                    0.0 if last else float(len(rows) + 2),
+                ]
+            )
+    table = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
+    return table, np.array(
+        [start.get(int(head), 0) for head in heads], dtype=np.float64
+    )
+
+
+def _numbers(declared: dict[str, Any], name: str, count: int) -> list[float]:
+    value = declared.get(name)
+    if value is None or isinstance(value, str):
+        return [0.0] * count
+    values = list(value) if isinstance(value, (list, tuple, np.ndarray)) else [value]
+    return [float(values[i]) if i < len(values) else 0.0 for i in range(count)]
+
+
+def _texts(value: Any) -> list[str]:
+    """Return a definition's values as the text a file carries them in."""
+    if isinstance(value, str):
+        return [value]
+    values = list(value) if isinstance(value, (list, tuple, np.ndarray)) else [value]
+    return [item if isinstance(item, str) else repr(float(item)) for item in values]
