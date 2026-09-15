@@ -3,6 +3,7 @@
  * @brief The compiled extension, bound as `pulserver._ext`.
  */
 
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -18,6 +19,7 @@
 
 #include "pulseg.h"
 #include "pulseg_cache.h"
+#include "pulseq.h"
 
 namespace py = pybind11;
 
@@ -125,6 +127,89 @@ py::dict summarize(const pulseg_collection *coll)
     result["subsequences"] = subsequences;
     result["segments"] = segments;
     return result;
+}
+
+/* ------ The parsed file's own libraries, for comparison ------ */
+
+/* An (rows, width) array of doubles, copied out of a C row array. */
+py::array_t<double> rows(const PULSEQ_REAL *data, int count, int width)
+{
+    py::array_t<double> out({count, width});
+    auto view = out.mutable_unchecked<2>();
+    for (int i = 0; i < count; ++i)
+        for (int j = 0; j < width; ++j)
+            view(i, j) = static_cast<double>(data[(std::size_t)i * width + j]);
+    return out;
+}
+
+py::array_t<int> column(const int *data, int count)
+{
+    py::array_t<int> out(count);
+    auto view = out.mutable_unchecked<1>();
+    for (int i = 0; i < count; ++i)
+        view(i) = data ? data[i] : 0;
+    return out;
+}
+
+py::dict libraries(const pulseq_file &seq)
+{
+    py::dict out;
+    out["blocks"] = rows(seq.block_library ? &seq.block_library[0][0] : nullptr, seq.num_blocks, 7);
+    out["rf"] = rows(seq.rf_library ? &seq.rf_library[0][0] : nullptr, seq.rf_library_size, 10);
+    out["rf_use"] = column(seq.rf_use_tags, seq.rf_library_size);
+    out["grad"] = rows(seq.grad_library ? &seq.grad_library[0][0] : nullptr, seq.grad_library_size, 7);
+    out["adc"] = rows(seq.adc_library ? &seq.adc_library[0][0] : nullptr, seq.adc_library_size, 8);
+    out["extensions"] =
+        rows(seq.extensions_library ? &seq.extensions_library[0][0] : nullptr,
+             seq.extensions_library_size, 3);
+    out["triggers"] =
+        rows(seq.trigger_library ? &seq.trigger_library[0][0] : nullptr, seq.trigger_library_size, 4);
+    out["rotations"] = rows(
+        seq.rotation_quaternion_library ? &seq.rotation_quaternion_library[0][0] : nullptr,
+        seq.rotation_library_size,
+        4);
+    out["labelset"] =
+        rows(seq.labelset_library ? &seq.labelset_library[0][0] : nullptr, seq.labelset_library_size, 2);
+    out["labelinc"] =
+        rows(seq.labelinc_library ? &seq.labelinc_library[0][0] : nullptr, seq.labelinc_library_size, 2);
+    out["soft_delays"] = rows(
+        seq.soft_delay_library ? &seq.soft_delay_library[0][0] : nullptr, seq.soft_delay_library_size, 4);
+
+    py::list shims;
+    for (int i = 0; i < seq.rf_shim_library_size; ++i)
+    {
+        const pulseq_rf_shim_entry &entry = seq.rf_shim_library[i];
+        std::vector<double> values;
+        for (int j = 0; j < 2 * entry.num_channels; ++j)
+            values.push_back(static_cast<double>(entry.values[j]));
+        shims.append(values);
+    }
+    out["rf_shims"] = shims;
+
+    py::list shapes;
+    for (int i = 0; i < seq.shapes_library_size; ++i)
+    {
+        const pulseq_shape &shape = seq.shapes_library[i];
+        std::vector<double> samples;
+        for (int j = 0; j < shape.num_samples; ++j)
+            samples.push_back(static_cast<double>(shape.samples[j]));
+        shapes.append(py::make_tuple(shape.num_uncompressed_samples, samples));
+    }
+    out["shapes"] = shapes;
+
+    out["extension_map"] = std::vector<int>(seq.extension_map, seq.extension_map + 8);
+    out["extension_lut"] = column(seq.extension_lut, seq.extension_lut_size + 1);
+
+    py::dict definitions;
+    for (int i = 0; i < seq.num_definitions; ++i)
+    {
+        std::vector<std::string> values;
+        for (int j = 0; j < seq.definitions_library[i].value_size; ++j)
+            values.push_back(seq.definitions_library[i].value[j]);
+        definitions[py::str(seq.definitions_library[i].name)] = values;
+    }
+    out["definitions"] = definitions;
+    return out;
 }
 
 Collection read(const std::string &seq_path, const pulseg_opts &opts, bool write_cache, bool verify_signature)
@@ -235,6 +320,34 @@ PYBIND11_MODULE(_ext, module)
             }
             throw std::invalid_argument("the NextSequence chain from " + first_path + " does not end");
         });
+
+    module.def(
+        "parse_libraries",
+        [](const std::string &seq_path)
+        {
+            pulseq_file seq;
+            pulseq_file_init(&seq, nullptr);
+            const int rc = pulseq_read(&seq, seq_path.c_str());
+            if (PULSEQ_FAILED(rc))
+            {
+                pulseq_file_free(&seq);
+                throw std::invalid_argument(
+                    "cannot read " + seq_path + " [error " + std::to_string(rc) + "]");
+            }
+            py::dict out;
+            try
+            {
+                out = libraries(seq);
+            }
+            catch (...)
+            {
+                pulseq_file_free(&seq);
+                throw;
+            }
+            pulseq_file_free(&seq);
+            return out;
+        },
+        "The event, shape and definition libraries of a .seq file, as the C parser reads them.");
 
     module.def(
         "summary_from_cache",
