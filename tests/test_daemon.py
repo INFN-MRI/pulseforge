@@ -1,81 +1,14 @@
-import shutil
+import json
 import struct
-import subprocess
-import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest
+from _host import FIXTURE_LIMITS, GE_IR, LIMITS, Daemon
 
-from pulserver.host import SessionKey
-from pulserver.host.client import HostClient, HostError
+from pulserver.host.client import HostError
 from pulserver.protocol import TEPreset
 
-PLUGINS = Path(__file__).parent / "plugins"
 FIXTURES = Path(__file__).parent / "fixtures" / "sequences"
-# The limits the IR fixtures convert under.
-FIXTURE_LIMITS = {
-    "max_grad": 40.0,
-    "grad_unit": "mT/m",
-    "max_slew": 170.0,
-    "slew_unit": "T/m/s",
-    "B0": 3.0,
-    "rf_raster_time": 1e-6,
-    "grad_raster_time": 1e-5,
-    "adc_raster_time": 1e-7,
-    "block_duration_raster": 1e-5,
-}
-GE_IR = {"ir_vendor": 2, "ir_label_column_map": "8 0 6", "ir_cache_ext": ".pge"}
-LIMITS = {
-    "max_grad": 40.0,
-    "grad_unit": "mT/m",
-    "max_slew": 150.0,
-    "slew_unit": "T/m/s",
-}
-
-
-class Daemon:
-    def __init__(self, base: Path) -> None:
-        self.base = base
-        self._socket_dir = Path(tempfile.mkdtemp(prefix="ps"))
-        self.socket = self._socket_dir / "s"
-        self._process = None
-
-    def start(self) -> None:
-        self._process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "pulserver.host",
-                "--base",
-                str(self.base),
-                "--socket",
-                str(self.socket),
-                "--plugins",
-                str(PLUGINS),
-                "--workers",
-                "1",
-            ]
-        )
-        deadline = time.monotonic() + 30
-        while not self.socket.exists():
-            if self._process.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError("the host daemon did not start")
-            time.sleep(0.05)
-
-    def stop(self) -> None:
-        self._process.terminate()
-        self._process.wait(timeout=30)
-        self.socket.unlink(missing_ok=True)
-
-    def client(self, pid: int) -> HostClient:
-        return HostClient(self.socket, SessionKey(pid=pid, day=20711))
-
-    def cleanup(self) -> None:
-        if self._process.poll() is None:
-            self.stop()
-        shutil.rmtree(self._socket_dir, ignore_errors=True)
 
 
 @pytest.fixture
@@ -197,3 +130,17 @@ def test_a_session_without_a_plugin_refuses_design_commands(daemon):
     client.open(None, FIXTURE_LIMITS)
     with pytest.raises(HostError, match="no plugin"):
         client.list_protocol()
+
+
+def test_a_generated_revision_names_the_reconstruction_its_sequence_binds(daemon):
+    bound, unbound = daemon.client(pid=901), daemon.client(pid=902)
+    bound.open("gre2d", LIMITS)
+    unbound.open("gre2d_raw", LIMITS)
+    values = {"nx": 32, "ny": 16, "TE": 5000}
+    assert _meta(daemon, bound, bound.generate(values))["recon"] == "gre2d"
+    assert _meta(daemon, unbound, unbound.generate(values))["recon"] == ""
+
+
+def _meta(daemon, client, revision):
+    directory = daemon.base / "bucket" / str(client.session) / "rev" / str(revision)
+    return json.loads((directory / "meta.json").read_text())

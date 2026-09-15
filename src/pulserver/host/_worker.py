@@ -65,16 +65,17 @@ def validate(
 
 def generate(
     path: str, limits: Mapping[str, Any], request: Mapping[str, Any], directory: str
-) -> tuple[Validation, list[str], str | None]:
-    """Design into ``directory`` and convert the result.
+) -> tuple[Validation, list[str], str | None, str]:
+    """Design into ``directory``, convert the result, and name its reconstruction.
 
     The cache file name is ``None`` for an invalid request, which writes nothing.
     """
     system, options = split_limits(limits)
-    validation, paths = _plugin(path).generate(system, request, Path(directory))
+    plugin = _plugin(path)
+    validation, paths = plugin.generate(system, request, Path(directory))
     if not paths:
-        return validation, paths, None
-    return validation, paths, ir.convert(paths[0], system, **options).name
+        return validation, paths, None, plugin.recon
+    return validation, paths, ir.convert(paths[0], system, **options).name, plugin.recon
 
 
 def chain(first: str) -> list[str]:

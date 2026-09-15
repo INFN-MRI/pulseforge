@@ -209,10 +209,18 @@ class ScannerSequence:
     values are read and reported to six significant digits, the precision of a
     float32 CV. Either way a reply stored in a CV and sent back resolves to
     itself.
+
+    Attributes
+    ----------
+    recon : str
+        Reconstruction plugin the data of this sequence is reconstructed with,
+        recorded in every revision generated from it. Empty leaves the choice
+        to the reconstruction client.
     """
 
     app: ClassVar[type[sequences.SequenceApp]]
     ui: ClassVar[Mapping[str, Entry]]
+    recon: ClassVar[str] = ""
 
     def listing(self) -> dict[str, Parameter]:
         """Return the protocol with its schema, valued at the application's defaults.

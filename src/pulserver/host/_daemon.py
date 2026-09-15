@@ -274,7 +274,7 @@ class HostDaemon:
                 return f"GENERATED {revision}\n"
             staged = session.stage()
             try:
-                validation, paths, cache = await self._run(
+                validation, paths, cache, recon = await self._run(
                     _worker.generate,
                     path,
                     session.limits,
@@ -288,6 +288,7 @@ class HostDaemon:
                 )
                 meta = {
                     "plugin": session.plugin,
+                    "recon": recon,
                     "limits": session.limits,
                     "hash": digest,
                     "files": [*(Path(p).name for p in paths), cache],
