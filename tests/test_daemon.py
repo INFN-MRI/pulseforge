@@ -2,6 +2,7 @@ import json
 import struct
 from pathlib import Path
 
+import pypulseqpp as pp
 import pytest
 from _host import FIXTURE_LIMITS, GE_IR, LIMITS, Daemon
 
@@ -101,6 +102,17 @@ def test_a_generated_revision_carries_its_cache(daemon):
     ]
     vendor = struct.unpack("<6i", (revision / "sequence.pge").read_bytes()[:24])[4]
     assert vendor == 2
+
+
+def test_a_generated_sequence_is_written_in_the_binary_form(daemon):
+    client = daemon.client(pid=702)
+    client.open("tiny", LIMITS)
+    assert client.generate({"TE": 8000}) == 1
+    written = _session_dir(daemon, client) / "rev" / "1" / "sequence.seq"
+    assert b"[BLOCKS]" not in written.read_bytes()
+    sequence = pp.Sequence()
+    sequence.read(written, verify=True)
+    assert sequence.num_blocks
 
 
 def test_an_imported_chain_is_staged_and_converted(daemon):
