@@ -6,8 +6,10 @@ __all__ = [
     "BlockExtensions",
     "SequenceLibraries",
     "Shape",
+    "SpecificationLibraries",
     "block_extensions",
     "sequence_libraries",
+    "specification_libraries",
 ]
 
 from dataclasses import dataclass, field
@@ -56,6 +58,46 @@ _SPECIFICATIONS = {
     "rf_shim": "RF_SHIMS",
     "trigger": "TRIGGERS",
     "soft_delay": "DELAYS",
+}
+
+#: Label ids the raw library rows carry. Past ACQ these are the scanner
+#: converter's own numbering, which is not pypulseqpp's: a file names its
+#: labels, so only the number they are held under differs.
+LABEL_IDS = {
+    "SLC": 1,
+    "SEG": 2,
+    "REP": 3,
+    "AVG": 4,
+    "SET": 5,
+    "ECO": 6,
+    "PHS": 7,
+    "LIN": 8,
+    "PAR": 9,
+    "ACQ": 10,
+    "NAV": 11,
+    "REV": 12,
+    "SMS": 13,
+    "REF": 14,
+    "IMA": 15,
+    "NOISE": 16,
+    "PMC": 17,
+    "NOROT": 18,
+    "NOPOS": 19,
+    "NOSCL": 20,
+    "ONCE": 21,
+    "TRID": 22,
+    "OFF": 23,
+}
+
+#: Hint a soft delay names, as a Pulseq file numbers it; anything else is -1.
+_HINTS = {
+    "TE": 1,
+    "TR": 2,
+    "TI": 3,
+    "ESP": 4,
+    "RECTIME": 5,
+    "T2PREP": 6,
+    "TE2": 7,
 }
 
 
@@ -378,3 +420,159 @@ def _resolve(core: Any, head: int, block: int) -> _Chain:
         else:
             target[label.label] = int(label.value)
     return chain
+
+
+@dataclass(frozen=True)
+class SpecificationLibraries:
+    """The rows a block's extension chain points at, indexed by the file's ids.
+
+    Row 0 is id 1, as in :class:`SequenceLibraries`. A row no block points at
+    is not recoverable and is absent.
+
+    Attributes
+    ----------
+    rotations : NDArray[np.float64]
+        ``(R, 4)``: the quaternion turning the block's gradients.
+    triggers : NDArray[np.float64]
+        ``(T, 4)``: control code, channel code, delay in µs, duration in µs.
+    rf_shims : tuple[NDArray[np.float64], ...]
+        Per row, magnitude and phase alternating, one pair per transmit
+        channel; phase in rad.
+    soft_delays : NDArray[np.float64]
+        ``(S, 4)``: the delay's number, offset in µs, factor, and the id of
+        the hint it names; -1 for a hint the format does not number.
+    labelset, labelinc : NDArray[np.float64]
+        ``(L, 2)``: the value and the label it applies to, numbered as
+        :data:`LABEL_IDS` numbers it.
+    referenced : dict[str, tuple[int, ...]]
+        Per table, the ids some chain points at. A row between them that no
+        chain names is not recoverable and reads as zeros.
+    """
+
+    rotations: NDArray[np.float64]
+    triggers: NDArray[np.float64]
+    rf_shims: tuple[NDArray[np.float64], ...]
+    soft_delays: NDArray[np.float64]
+    labelset: NDArray[np.float64]
+    labelinc: NDArray[np.float64]
+    referenced: dict[str, tuple[int, ...]]
+
+
+def specification_libraries(sequence: Any) -> SpecificationLibraries:
+    """Read the rows every extension chain of a sequence points at.
+
+    Each chain is decoded once and its events are attributed to the ids the
+    chain names, in chain order, which is the order a decoded block lists them
+    in.
+    """
+    core = sequence._native
+    heads = np.asarray(core.block_events(), dtype=np.int64)[:, 5]
+    kinds = {
+        name: core.extension_type_id(specification)
+        for name, specification in _SPECIFICATIONS.items()
+    }
+    kinds["labelset"] = core.extension_type_id("LABELSET")
+    kinds["labelinc"] = core.extension_type_id("LABELINC")
+
+    rows: dict[str, dict[int, Any]] = {name: {} for name in kinds}
+    seen: set[int] = set()
+    for index, head in enumerate(heads):
+        head = int(head)
+        if head == 0 or head in seen:
+            continue
+        seen.add(head)
+        _read_chain(core, head, index + 1, kinds, rows)
+
+    return SpecificationLibraries(
+        rotations=_table(rows["rotation"], 4),
+        triggers=_table(rows["trigger"], 4),
+        rf_shims=_ragged(rows["rf_shim"]),
+        soft_delays=_table(rows["soft_delay"], 4),
+        labelset=_table(rows["labelset"], 2),
+        labelinc=_table(rows["labelinc"], 2),
+        referenced={
+            table: tuple(sorted(rows[name]))
+            for name, table in (
+                ("rotation", "rotations"),
+                ("trigger", "triggers"),
+                ("rf_shim", "rf_shims"),
+                ("soft_delay", "soft_delays"),
+                ("labelset", "labelset"),
+                ("labelinc", "labelinc"),
+            )
+        },
+    )
+
+
+def _read_chain(
+    core: Any,
+    head: int,
+    block: int,
+    kinds: dict[str, int],
+    rows: dict[str, dict[int, Any]],
+) -> None:
+    links = np.asarray(core.extension_chain(head), dtype=np.int64).reshape(2, -1)
+    decoded = core.decode_block(block)
+    labels = list(decoded.get("label") or ())
+    triggers = list(decoded.get("trig") or ())
+    for name, kind in kinds.items():
+        referenced = links[1][links[0] == kind]
+        for position, identifier in enumerate(referenced):
+            identifier = int(identifier)
+            if identifier in rows[name]:
+                continue
+            row = _specification_row(name, position, decoded, labels, triggers)
+            if row is not None:
+                rows[name][identifier] = row
+
+
+def _specification_row(
+    name: str,
+    position: int,
+    decoded: dict[str, Any],
+    labels: list[Any],
+    triggers: list[Any],
+) -> Any:
+    """One row of a specification, taken from the event at ``position`` of its kind."""
+    if name == "rotation":
+        return np.asarray(decoded["rotation"].quaternion, dtype=np.float64)
+    if name == "trigger":
+        event = triggers[position]
+        return np.array(
+            [
+                event.control,
+                event.channel_code,
+                _micro(event.delay),
+                _micro(event.duration),
+            ]
+        )
+    if name == "rf_shim":
+        shim = np.asarray(decoded["rf_shim"].shim_vector)
+        return np.stack([np.abs(shim), np.angle(shim)], axis=1).reshape(-1)
+    if name == "soft_delay":
+        event = decoded["soft_delay"]
+        return np.array(
+            [
+                event.numID,
+                _micro(event.offset),
+                event.factor,
+                _HINTS.get(event.hint, -1),
+            ]
+        )
+    matching = [label for label in labels if label.setting == (name == "labelset")]
+    event = matching[position]
+    return np.array([event.value, LABEL_IDS.get(event.label, -1)])
+
+
+def _table(rows: dict[int, Any], width: int) -> NDArray[np.float64]:
+    table = np.zeros((max(rows, default=0), width), dtype=np.float64)
+    for identifier, row in rows.items():
+        table[identifier - 1] = row
+    return table
+
+
+def _ragged(rows: dict[int, Any]) -> tuple[NDArray[np.float64], ...]:
+    empty = np.zeros(0, dtype=np.float64)
+    return tuple(
+        rows.get(identifier + 1, empty) for identifier in range(max(rows, default=0))
+    )
