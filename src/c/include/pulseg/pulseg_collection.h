@@ -1,0 +1,726 @@
+/**
+ * @file pulseg_collection.h
+ * @brief The loaded sequence collection: lifecycle, diagnostics, getters, cursor.
+ *
+ * A pulseg_collection is one or more chained .seq subsequences after dedup,
+ * TR detection and segmentation -- the central object every other module
+ * takes as input. This header carries its lifecycle (pulseg_read /
+ * pulseg_collection_free), the error/diagnostic surface, the read-only
+ * getters that expose its contents without revealing the internal tables,
+ * and the block cursor used to walk the execution stream at scan time.
+ */
+
+#ifndef PULSEG_COLLECTION_H
+#define PULSEG_COLLECTION_H
+
+#include "pulseg_config.h"
+#include "pulseg_types.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+    /* ================================================================== */
+    /*  Read / load                                                       */
+    /* ================================================================== */
+
+    /**
+     * @brief Read a (possibly chained) Pulseq sequence from disk.
+     *
+     * On success the library heap-allocates the collection and writes it
+     * to @p *out_coll.  The caller owns the collection and must free it
+     * with pulseg_collection_free().
+     *
+     * @param[out] out_coll         Receives the allocated collection.
+     * @param[out] diag             Diagnostic info on failure.
+     * @param[in]  file_path        Path to the first .seq file.
+     * @param[in]  opts             Scanner limits / rasters.
+     * @param[in]  cache_binary     1 = read/write binary cache alongside .seq (extension per pulseg_opts.cache_ext).
+     * @param[in]  verify_signature 1 = verify MD5 signature for every .seq
+     *                              file in the chain.
+     * @param[in]  parse_labels     1 = build ADC label table via dry-run.
+     * @return PULSEG_SUCCESS on success, negative error code on failure.
+     */
+    int pulseg_read(
+        pulseg_collection **out_coll,
+        pulseg_diagnostic *diag,
+        const char *file_path,
+        const pulseg_opts *opts,
+        int cache_binary,
+        int verify_signature,
+        int parse_labels);
+
+    /**
+     * @brief Read one or more Pulseq subsequences from in-memory buffers.
+     *
+     * Wrapper-friendly counterpart of pulseg_read(): the caller supplies
+     * pre-read file contents (e.g.\ from a Python bytes object) and the
+     * library parses them without touching the filesystem.  Caching and
+     * signature verification are skipped.
+     *
+     * @param[out] out_coll      Receives the allocated collection.
+     * @param[out] diag          Diagnostic info on failure.
+     * @param[in]  buffers       Array of NUL-terminated .seq contents.
+     * @param[in]  buffer_sizes  Byte length of each buffer (excl. NUL).
+     * @param[in]  num_buffers   Number of buffers (>= 1).
+     * @param[in]  opts          Scanner limits / rasters.
+     * @return PULSEG_SUCCESS on success, negative error code on failure.
+     */
+    int pulseg_read_from_buffers(
+        pulseg_collection **out_coll,
+        pulseg_diagnostic *diag,
+        const char *const *buffers,
+        const int *buffer_sizes,
+        int num_buffers,
+        const pulseg_opts *opts,
+        int parse_labels);
+
+    /* ================================================================== */
+    /*  Diagnostic helpers                                                */
+    /* ================================================================== */
+
+    /** @brief Zero-initialize a diagnostic struct. */
+    void pulseg_diagnostic_init(pulseg_diagnostic *diag);
+
+    /** @brief Return a human-readable message for an error code. */
+    const char *pulseg_get_error_message(int code);
+
+    /** @brief Return a fix-suggestion hint for an error code. */
+    const char *pulseg_get_error_hint(int code);
+
+    /**
+     * @brief Format error code + diagnostic into a single string.
+     *
+     * Writes at most @p buf_size bytes (always NUL-terminated).
+     *
+     * @param[out] buf       Output buffer (>= 512 bytes recommended).
+     * @param[in]  buf_size  Size of @p buf.
+     * @param[in]  code      Error code.
+     * @param[in]  diag      Optional diagnostic (NULL to omit context).
+     * @return Characters written (excluding NUL), 0 on error.
+     */
+    int pulseg_format_error(char *buf, int buf_size, int code, const pulseg_diagnostic *diag);
+
+    /* ================================================================== */
+    /*  Consistency check                                                 */
+    /* ================================================================== */
+
+    /**
+     * @brief Re-run internal consistency checks on a loaded collection.
+     *
+     * Already called by pulseg_read / pulseg_read_from_buffers.
+     * Exposed for unit-test or post-hoc validation workflows.
+     *
+     * @param[in]  coll  Loaded collection.
+     * @param[out] diag  Diagnostic (may be NULL).
+     * @return PULSEG_SUCCESS on success, negative error code on failure.
+     */
+    int pulseg_check_consistency(const pulseg_collection *coll, pulseg_diagnostic *diag);
+
+    /**
+     * @brief Free every subsequence descriptor and the collection itself.
+     *
+     * @param[in,out] coll  Collection from pulseg_read() / pulseg_read_from_buffers()
+     *                      / pulseg_collection_alloc(); NULL is a no-op.
+     */
+    void pulseg_collection_free(pulseg_collection *coll);
+
+    /**
+     * @brief Heap-allocate and zero-initialize an empty collection, ready to
+     * be populated by pulseg_convert_collection(). This is the same
+     * allocation pulseg_read() / pulseg_read_from_buffers() perform
+     * internally; exposed so external producers of pulseq_file that call
+     * pulseg_convert_collection() directly don't need to know
+     * pulseg_collection's (intentionally opaque) internal layout.
+     * @return A freshly allocated collection, or NULL on allocation failure.
+     *         Free with pulseg_collection_free().
+     */
+    pulseg_collection *pulseg_collection_alloc(void);
+
+    /* ================================================================== */
+    /*  Subsequence getters                                               */
+    /* ================================================================== */
+
+    /**
+     * @brief Fill a pulseg_collection_info with collection-level summary.
+     *
+     * Replaces pulseg_get_num_subsequences, pulseg_get_num_segments,
+     * pulseg_get_max_adc_samples, pulseg_get_total_readouts,
+     * pulseg_get_total_duration_us.
+     */
+    int pulseg_get_collection_info(const pulseg_collection *coll, pulseg_collection_info *info);
+
+    /**
+     * @brief Fill a pulseg_subseq_info for one subsequence.
+     */
+    int pulseg_get_subseq_info(
+        const pulseg_collection *coll,
+        pulseg_subseq_info *info,
+        int subseq_idx);
+
+    /**
+     * @brief Fill a pulseg_segment_info for one segment.
+     *
+     * Replaces ~11 individual per-segment getters (duration, blocks,
+     * trigger, NAV, timing gaps).
+     */
+    int pulseg_get_segment_info(
+        const pulseg_collection *coll,
+        pulseg_segment_info *info,
+        int seg_idx);
+
+    /**
+     * @brief Return 1 if any block in the segment has X/Y/Z gradient, else 0.
+     */
+    int pulseg_segment_has_grad(const pulseg_collection *coll, int seg_idx);
+
+    /**
+     * @brief Fill a pulseg_block_info for one block within a segment.
+     *
+     * Replaces all block-level has_xxx / get_xxx accessor pairs.
+     * Waveform data is NOT included; use the dedicated waveform getters
+     * keyed by metadata from this struct.
+     */
+    int pulseg_get_block_info(
+        const pulseg_collection *coll,
+        pulseg_block_info *info,
+        int seg_idx,
+        int blk_idx);
+
+    /**
+     * @brief Fill a pulseg_adc_def for a unique ADC definition.
+     *
+     * @p adc_idx is a global index across all subsequences (same as
+     * block_info.adc_def_id).
+     */
+    int pulseg_get_adc_def(const pulseg_collection *coll, pulseg_adc_def *def, int adc_idx);
+
+    /**
+     * @brief Fill a pulseg_rf_shim_def for one RF shim definition.
+     *
+     * @p shim_idx is the rf_shim_id from pulseg_block_instance.  It is
+     * LOCAL to the given @p subseq_idx (same convention as rf_id, gx_id, etc.);
+     * each subsequence stores its own shim table starting at index 0.
+     * Returns PULSEG_ERR_INDEX if either index is out of range.
+     */
+    int pulseg_get_rf_shim_def(
+        const pulseg_collection *coll,
+        pulseg_rf_shim_def *def,
+        int subseq_idx,
+        int shim_idx);
+
+    /**
+     * @brief Return the number of RF shim definitions in a subsequence.
+     */
+    int pulseg_get_num_rf_shims(const pulseg_collection *coll, int subseq_idx);
+
+    /**
+     * @brief Return the RF isocenter time (us) relative to segment start.
+     *
+     * Looks up the segment timing RF anchor matching @p blk_idx.
+     * Returns -1.0f if the block has no RF anchor.
+     */
+    float pulseg_get_rf_isocenter_us(const pulseg_collection *coll, int seg_idx, int blk_idx);
+
+    /**
+     * @brief Compute scan-time info from a fully loaded collection.
+     *
+     * Accounts for every block duration and every segment boundary the
+     * scan table holds.
+     *
+     * @param[in]  coll  Loaded collection.
+     * @param[out] info  Receives scan time summary.
+     * @return PULSEG_SUCCESS on success, negative error code on failure.
+     */
+    int pulseg_get_scan_time(const pulseg_collection *coll, pulseg_scan_time_info *info);
+
+    /* ================================================================== */
+    /*  Segment table getters (copy to caller buffer)                     */
+    /* ================================================================== */
+
+    /**
+     * @brief Get canonical segment-ID sequence for vendor gradient-heating checks.
+     *
+     * One entry per segment position of the canonical playback unit (the
+     * TR window's segments, in playback order).
+     *
+     * If @p out_ids is NULL, the function returns the required count only.
+     * Otherwise, @p out_ids must point to a buffer of at least that many ints.
+     *
+     * @param[in]  coll        Loaded collection.
+     * @param[out] out_ids     Output buffer, or NULL for count query.
+     * @param[in]  subseq_idx  Subsequence index.
+     * @return Number of IDs (>= 0), or negative error code.
+     */
+    int pulseg_get_canonical_segment_sequence(
+        const pulseg_collection *coll,
+        int *out_ids,
+        int subseq_idx);
+
+    /* ================================================================== */
+    /*  RF getters                                                        */
+    /* ================================================================== */
+
+    /**
+     * @brief Get RF statistics for a unique RF definition.
+     * @return PULSEG_SUCCESS on success.
+     */
+    int pulseg_get_rf_stats(
+        const pulseg_collection *coll,
+        pulseg_rf_stats *stats,
+        int subseq_idx,
+        int rf_idx);
+
+    /**
+     * @brief Get per-block RF definition IDs for one TR.
+     *
+     * @p out_rf_ids must point to a pre-allocated array of tr_size ints.
+     * Blocks without RF get -1.
+     * @return tr_size on success, negative error code on failure.
+     */
+    int pulseg_get_tr_rf_ids(const pulseg_collection *coll, int *out_rf_ids, int subseq_idx);
+
+    /**
+     * @brief Build an ordered array of RF stats for the canonical TR.
+     *
+     * Walks the canonical RF playback unit for the specified subsequence and,
+     * for each block that carries an RF event, hard-copies the base rf_stats,
+     * then patches event-specific amplitude-dependent fields from the actual
+     * amplitude at that block position, and sets num_instances to the
+     * repetition count for that canonical unit.
+     *
+     * Canonical-unit rules: one imaging TR when every unit is a structural
+     * TR, one full pass (average expansion included) when a non-TR-shaped
+     * section folds the pass into the unit of analysis.
+     *
+     * The library allocates @p *out_pulses via PULSEG_ALLOC(); the caller
+     * must release it with PULSEG_FREE() when done.  On return @p *out_pulses is NULL if the canonical
+     * unit contains no RF events.
+     *
+     * @param[in]  coll          Loaded collection.
+     * @param[out] out_pulses    Set to a malloc'd array; caller must free().
+     * @param[in]  subseq_idx    Subsequence index.
+     * @return Number of RF entries (>= 0), or negative error code.
+     */
+    int pulseg_get_rf_array(
+        const pulseg_collection *coll,
+        pulseg_rf_stats **out_pulses,
+        int subseq_idx);
+
+    /**
+     * @brief Build an ordered array of RF event identities for the canonical TR,
+     * index-aligned with pulseg_get_rf_array() (same count, same walk order:
+     * events[i] describes the same occurrence as out_pulses[i]).
+     *
+     * The library allocates @p *out_events via PULSEG_ALLOC(); the caller
+     * must release it with PULSEG_FREE() when done.
+     *
+     * @param[in]  coll        Loaded collection.
+     * @param[out] out_events  Set to a malloc'd array; caller must free().
+     * @param[in]  subseq_idx  Subsequence index.
+     * @return Number of RF entries (>= 0), or negative error code.
+     */
+    int pulseg_get_rf_event_array(
+        const pulseg_collection *coll,
+        pulseg_rf_event **out_events,
+        int subseq_idx);
+
+    /**
+     * @brief Identify, structurally-verify, and deduplicate TRID-labeled
+     * groups within a subsequence's materialized scan table.
+     *
+     * For each distinct non-zero TRID found on desc->block_table[...].trid
+     * (sticky, set via pulseq LABELSET TRID), walks the scan table to find
+     * every maximal contiguous occurrence of that group, verifies every
+     * occurrence after the first is structurally identical to the first
+     * (same block definitions in the same order -- content identity, not
+     * amplitude/phase/rotation, which may legitimately vary per repeat), and
+     * returns one deduplicated pulseg_tr_group entry per TRID. Returns
+     * PULSEG_ERROR (not a partial/best-effort result) if any two occurrences
+     * of the same TRID are structurally inconsistent.
+     *
+     * Subsequences with no TRID labels return 0 (not an error) -- callers
+     * should keep their existing whole-subsequence behavior in that case.
+     *
+     * The library allocates @p *out_groups via PULSEG_ALLOC(); the caller
+     * must release it with PULSEG_FREE() when done.
+     *
+     * @param[in]  coll         Loaded collection.
+     * @param[out] out_groups   Set to a malloc'd array; caller must free().
+     * @param[in]  subseq_idx   Subsequence index.
+     * @return Number of distinct TR groups (>= 0), or negative error code.
+     */
+    int pulseg_get_tr_groups(
+        const pulseg_collection *coll,
+        pulseg_tr_group **out_groups,
+        int subseq_idx);
+
+    /**
+     * @brief Return decompressed RF magnitude waveform (multi-channel).
+     *
+     * Returns an array of num_channels pointers, each pointing to
+     * num_samples floats.  The waveform is normalised to a peak of about 1.0.
+     * Use pulseg_get_rf_initial_amplitude_hz() and
+     * pulseg_get_rf_max_amplitude_hz() for the physical scale.
+     * Caller must free each result[ch] with PULSEG_FREE, then
+     * free the result pointer itself with PULSEG_FREE.
+     */
+    float **pulseg_get_rf_magnitude(
+        const pulseg_collection *coll,
+        int *num_channels,
+        int *num_samples,
+        int seg_idx,
+        int blk_idx);
+
+    /**
+     * @brief Return decompressed RF phase waveform (rad, multi-channel).
+     *
+     * Returns an array of num_channels pointers, each pointing to
+     * num_samples floats.  Caller must free each result[ch] with
+     * PULSEG_FREE, then the result pointer with PULSEG_FREE.
+     */
+    float **pulseg_get_rf_phase(
+        const pulseg_collection *coll,
+        int *num_channels,
+        int *num_samples,
+        int seg_idx,
+        int blk_idx);
+
+    /**
+     * @brief Return RF time-point array (us, per-channel).
+     *
+     * For multi-channel RF the tiled time shape is truncated to the
+     * first channel (all channels share the same time base).
+     * Caller must free the returned array with PULSEG_FREE.
+     */
+    float *pulseg_get_rf_time_us(const pulseg_collection *coll, int seg_idx, int blk_idx);
+
+    /** @brief Return initial RF amplitude (Hz) from the max-energy segment instance. */
+    float pulseg_get_rf_initial_amplitude_hz(
+        const pulseg_collection *coll,
+        int seg_idx,
+        int blk_idx);
+
+    /** @brief Return peak RF amplitude (Hz) from the definition (unsigned max). */
+    float pulseg_get_rf_max_amplitude_hz(const pulseg_collection *coll, int seg_idx, int blk_idx);
+
+    /**
+     * @brief Return decompressed RF magnitude waveform, keyed by RF
+     * definition rather than by (seg, blk) -- one lookup per unique
+     * definition. Same semantics/ownership as pulseg_get_rf_magnitude().
+     * Returns NULL on bad subseq_idx/rf_def_id or absent shape.
+     */
+    float **pulseg_get_rf_def_magnitude(
+        const pulseg_collection *coll,
+        int *num_channels,
+        int *num_samples,
+        int subseq_idx,
+        int rf_def_id);
+
+    /**
+     * @brief Return decompressed RF phase waveform, keyed by RF definition.
+     * Same semantics/ownership as pulseg_get_rf_phase(). NULL if the
+     * definition has no phase shape (a common phase, not encoded as one).
+     */
+    float **pulseg_get_rf_def_phase(
+        const pulseg_collection *coll,
+        int *num_channels,
+        int *num_samples,
+        int subseq_idx,
+        int rf_def_id);
+
+    /**
+     * @brief Return RF time-point array (us), keyed by RF definition.
+     * NULL if the definition has no time shape (uniform raster; caller
+     * should fall back to a constant dt = duration_us / num_samples).
+     * Caller must free the returned array with PULSEG_FREE.
+     */
+    float *pulseg_get_rf_def_time(
+        const pulseg_collection *coll,
+        int *num_samples,
+        int subseq_idx,
+        int rf_def_id);
+
+    /* ================================================================== */
+    /*  Gradient getters (waveform data only)                             */
+    /* ================================================================== */
+
+    /**
+     * @brief Return decompressed gradient amplitude waveforms (normalised).
+     *
+     * Waveforms are normalised to a peak of about 1.0.  Use
+     * pulseg_get_grad_initial_amplitude_hz_per_m() and
+     * pulseg_get_grad_max_amplitude_hz_per_m() for the physical scale.
+     * For multi-shot gradients, returns one waveform per shot.
+     * All shots share the same number of samples.
+     * Caller must free the returned array with PULSEG_FREE.
+     */
+    float **pulseg_get_grad_amplitude(
+        const pulseg_collection *coll,
+        int *num_shots,
+        int *num_samples,
+        int seg_idx,
+        int blk_idx,
+        int axis);
+
+    /** @brief Return initial amplitude of a gradient event (Hz/m). */
+    float pulseg_get_grad_initial_amplitude_hz_per_m(
+        const pulseg_collection *coll,
+        int seg_idx,
+        int blk_idx,
+        int axis);
+
+    /** @brief Return initial shot ID for a gradient event. */
+    int pulseg_get_grad_initial_shape_id(
+        const pulseg_collection *coll,
+        int seg_idx,
+        int blk_idx,
+        int axis);
+
+    /** @brief Return peak gradient amplitude (Hz/m, unsigned) from the definition. */
+    float pulseg_get_grad_max_amplitude_hz_per_m(
+        const pulseg_collection *coll,
+        int seg_idx,
+        int blk_idx,
+        int axis);
+
+    /**
+     * @brief Return gradient time-point array (us).
+     *
+     * The number of time points matches the amplitude waveform returned
+     * by pulseg_get_grad_amplitude (or 3/4 for trapezoids).
+     * Caller must free the returned array with PULSEG_FREE.
+     */
+    float *pulseg_get_grad_time_us(
+        const pulseg_collection *coll,
+        int seg_idx,
+        int blk_idx,
+        int axis);
+
+    /* ================================================================== */
+    /*  Label getters                                                     */
+    /* ================================================================== */
+
+    /** @brief Return label limits (min/max per label type) for a subsequence. */
+    int pulseg_get_label_limits(
+        const pulseg_collection *coll,
+        pulseg_label_limits *limits,
+        int subseq_idx);
+
+    /**
+     * @brief Get label values for a specific ADC occurrence.
+     *
+     * @p out_values must point to a pre-allocated array of at least
+     * subseq_info.num_label_columns ints.
+     *
+     * @return PULSEG_SUCCESS on success, negative error code on failure.
+     */
+    int pulseg_get_adc_label(
+        const pulseg_collection *coll,
+        int *out_values,
+        int subseq_idx,
+        int occurrence_idx);
+
+    /* ================================================================== */
+    /*  Block cursor / iterator                                           */
+    /* ================================================================== */
+
+    /**
+     * @brief Advance the block cursor to the next block.
+     * @return PULSEG_CURSOR_BLOCK or PULSEG_CURSOR_DONE.
+     */
+    int pulseg_cursor_next(pulseg_collection *coll);
+
+    /**
+     * @brief Advance the cursor and fetch the new block's info in one call.
+     *
+     * Convenience wrapper over pulseg_cursor_next() + pulseg_cursor_get_info()
+     * for the common iteration pattern:
+     * @code
+     *   while (pulseg_cursor_advance(coll, &info) == PULSEG_CURSOR_BLOCK) { ... }
+     * @endcode
+     *
+     * @return PULSEG_CURSOR_BLOCK (info filled), PULSEG_CURSOR_DONE (end of
+     *         collection), or a negative error code if info retrieval failed.
+     */
+    int pulseg_cursor_advance(pulseg_collection *coll, pulseg_cursor_info *info);
+
+    /**
+     * @brief Reset the cursor to the last marked position.
+     *
+     * Rewinds the cursor by the number of blocks advanced since the last
+     * pulseg_cursor_mark() call (or since the start of the current
+     * subsequence if no mark was set).  Typically used for PMC rescan.
+     */
+    void pulseg_cursor_rewind(pulseg_collection *coll);
+
+    /**
+     * @brief Bookmark the current cursor position.
+     *
+     * Sets the rewind anchor so that a subsequent pulseg_cursor_rewind()
+     * returns to this position.  Call at each TR boundary to enable
+     * single-TR rescans.
+     */
+    void pulseg_cursor_mark(pulseg_collection *coll);
+
+    /**
+     * @brief Rewind the cursor to the absolute start of the collection.
+     *
+     * Unlike pulseg_cursor_rewind() (which is a relative rewind-to-mark),
+     * this resets sequence_index as well, so a collection whose cursor has
+     * already reached PULSEG_CURSOR_DONE can be traversed again from the
+     * top.  Use before replaying a loaded collection from a fresh RSP entry
+     * point.
+     */
+    void pulseg_cursor_reset(pulseg_collection *coll);
+
+    /**
+     * @brief Get the resolved block instance at the current cursor position.
+     * @return PULSEG_SUCCESS on success, error code if cursor is done.
+     */
+    int pulseg_get_block_instance(const pulseg_collection *coll, pulseg_block_instance *inst);
+
+    /**
+     * @brief Get the resolved block instance at an arbitrary position.
+     *
+     * The random-access form of pulseg_get_block_instance(): it resolves
+     * the same per-instance view (PulSeg SegmentInstance, spec 3.3 --
+     * amplitude / phase / frequency / shot index / rotation / duration)
+     * without moving, or depending on, the cursor.
+     *
+     * This is a VIEW over the existing tables: nothing is stored per
+     * instance, the values are read from the block/RF/gradient/ADC tables
+     * on each call.
+     *
+     * @param[in]  coll                 Loaded collection.
+     * @param[out] inst                 Filled with the resolved instance.
+     * @param[in]  subseq_idx           0-based subsequence index.
+     * @param[in]  exec_stream_position Position in that subsequence's
+     *                                  execution stream.
+     * @return PULSEG_SUCCESS, or an error code if either index is out of
+     *         range.
+     */
+    int pulseg_get_block_instance_at(
+        const pulseg_collection *coll,
+        pulseg_block_instance *inst,
+        int subseq_idx,
+        int exec_stream_position);
+
+    /**
+     * @brief Get position and context metadata at the current cursor block.
+     *
+     * Returns segment boundaries, TR boundaries, trigger/NAV status, and
+     * the scan-table position needed for freq-mod library lookup.
+     *
+     * @param[in]  coll  Loaded collection.
+     * @param[out] info  Filled with cursor metadata.
+     * @return PULSEG_SUCCESS on success.
+     */
+    int pulseg_cursor_get_info(const pulseg_collection *coll, pulseg_cursor_info *info);
+
+    /* ================================================================== */
+    /*  Unique-block and segment-block getters                            */
+    /* ================================================================== */
+
+    /**
+     * @brief Return the number of unique block definitions for a subsequence.
+     *
+     * @param[in]  coll        Loaded collection.
+     * @param[in]  subseq_idx  0-based subsequence index.
+     * @return Number of unique blocks (>= 0), or negative error code.
+     */
+    int pulseg_get_num_unique_blocks(const pulseg_collection *coll, int subseq_idx);
+
+    /**
+     * @brief Return the number of deduplicated segment definitions for a
+     * subsequence (<= the pre-dedup segment position count).
+     *
+     * @param[in]  coll        Loaded collection.
+     * @param[in]  subseq_idx  0-based subsequence index.
+     * @return Number of unique segments (>= 0), or negative error code.
+     */
+    int pulseg_get_num_unique_segments(const pulseg_collection *coll, int subseq_idx);
+
+    /**
+     * @brief Return the 1-based .seq block ID for the n-th unique block.
+     *
+     * This is the key into pypulseq's block_events / Pulseq MATLAB toolbox
+     * block_events table.  The ID corresponds to the FIRST occurrence of
+     * that unique block pattern in the original .seq file.
+     *
+     * @param[in]  coll        Loaded collection.
+     * @param[in]  subseq_idx  0-based subsequence index.
+     * @param[in]  blk_def_idx 0-based index into the unique block list.
+     * @return 1-based block ID (> 0), or negative error code.
+     */
+    int pulseg_get_unique_block_id(const pulseg_collection *coll, int subseq_idx, int blk_def_idx);
+
+    /**
+     * @brief Copy unique-block-definition indices for a segment.
+     *
+     * For segment @p seg_idx, writes @c segment_info.num_blocks indices
+     * to @p out_ids.  Each value is a 0-based index into the unique block
+     * list (suitable for passing to pulseg_get_unique_block_id).
+     *
+     * @param[in]  coll      Loaded collection.
+     * @param[out] out_ids   Caller buffer (at least num_blocks ints).
+     * @param[in]  seg_idx   Global segment index.
+     * @return Number of IDs written (>= 0), or negative error code.
+     */
+    int pulseg_get_segment_block_def_indices(
+        const pulseg_collection *coll,
+        int *out_ids,
+        int seg_idx);
+
+    /* ================================================================== */
+    /*  Subsequence-local segment layout                                  */
+    /* ================================================================== */
+
+    /**
+     * @brief Fill a pulseg_segment_layout for a subsequence-local unique
+     * segment, resolving its deduplicated global index and (if a scan
+     * table is available) the start block of its max-energy instance.
+     *
+     * @param[in]  coll           Loaded collection.
+     * @param[out] info           Filled with the resolved layout.
+     * @param[in]  subseq_idx     0-based subsequence index.
+     * @param[in]  local_seg_idx  0-based index into that subsequence's own
+     *                            (pre-dedup) segment_definitions array.
+     * @return PULSEG_SUCCESS on success, negative error code on failure.
+     */
+    int pulseg_get_subseq_segment_layout(
+        const pulseg_collection *coll,
+        pulseg_segment_layout *info,
+        int subseq_idx,
+        int local_seg_idx);
+
+    /**
+     * @brief Copy resolved .seq block indices for a subsequence-local
+     * segment into a caller-supplied buffer.
+     *
+     * Prefers the max-energy scan instance (pulseg_segment_layout.-
+     * max_energy_start_block via the execution stream); falls back to the
+     * segment definition's own start_block when no scan table is
+     * available. If any resolved index would be out of range, nothing is
+     * written and the function returns 0 (not a partial result).
+     *
+     * @param[in]  coll           Loaded collection.
+     * @param[out] out_indices    Buffer of at least num_blocks ints (see
+     *                            pulseg_get_subseq_segment_layout()).
+     * @param[in]  subseq_idx     0-based subsequence index.
+     * @param[in]  local_seg_idx  0-based index into that subsequence's own
+     *                            (pre-dedup) segment_definitions array.
+     * @return Number of indices written (>= 0), or negative error code.
+     */
+    int pulseg_get_subseq_segment_block_indices(
+        const pulseg_collection *coll,
+        int *out_indices,
+        int subseq_idx,
+        int local_seg_idx);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PULSEG_COLLECTION_H */
