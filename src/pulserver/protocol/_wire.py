@@ -69,6 +69,10 @@ def _listing_line(name: str, p: Parameter) -> str:
 
 
 def _block_lines(text: str) -> list[tuple[str, str]]:
+    """Return the name and value of each line in a protocol block.
+
+    Lines may be commented out with ``#``, as in a ``.seq`` file header.
+    """
     entries, inside = [], False
     for raw in text.splitlines():
         line = raw.strip().lstrip("#").strip()
@@ -128,8 +132,8 @@ def format_values(
 ) -> str:
     """Format a value block, as requests and replies carry it.
 
-    A stringlist travels as its option index, which is what the interpreter
-    sends. Read-only entries are left out.
+    A stringlist travels as its option index, as the interpreter sends it.
+    Read-only entries are left out.
     """
     lines = []
     for name, value in values.items():
@@ -170,7 +174,10 @@ def parse_values(
 
 
 def format_validation(validation: Validation, listing: Mapping[str, Parameter]) -> str:
-    """Format a ``VALIDATE`` reply: status line, info line, value block."""
+    """Format a ``VALIDATE`` reply: status line, info line, value block.
+
+    Whitespace in the info text, newlines included, is folded to single spaces.
+    """
     if validation.valid:
         duration = "?" if validation.duration is None else repr(validation.duration)
         status = f"VALID {duration}"

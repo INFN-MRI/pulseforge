@@ -10,6 +10,8 @@ MAX_DROPDOWN_OPTIONS = 5
 
 
 class Kind(str, Enum):
+    """Type tag of a protocol entry on the wire."""
+
     FLOAT = "float"
     INT = "int"
     BOOL = "bool"
@@ -19,6 +21,8 @@ class Kind(str, Enum):
 
 
 class InputMode(str, Enum):
+    """How a numeric entry is presented in the scanner UI."""
+
     OFF = "off"
     TYPEIN = "typein"
     DROPDOWN = "dropdown"
@@ -27,8 +31,8 @@ class InputMode(str, Enum):
 class TEPreset(IntEnum):
     """Echo-time dropdown entries the UI shows as words.
 
-    Values are GE's, from ``epic_ui_control.h``, and travel as negative
-    dropdown options of a float entry.
+    Values are the scanner UI's preset codes; they travel as negative dropdown
+    options of a time entry.
     """
 
     MIN_FULL = -1
@@ -41,8 +45,8 @@ class TEPreset(IntEnum):
 class TRPreset(IntEnum):
     """Repetition-time dropdown entries the UI shows as words.
 
-    ``-1`` is the shortest TR here and the shortest full-echo TE in
-    :class:`TEPreset`.
+    The same code means different presets for TE and TR: ``-1`` is
+    ``TRPreset.MINIMUM`` here and ``TEPreset.MIN_FULL`` for an echo time.
     """
 
     MINIMUM = -1
@@ -57,7 +61,7 @@ class Parameter:
 
     Mirrors ``pulseg_protocol_value`` in the interpreter. Numeric entries carry
     a mode, range, increment, unit and, as a dropdown, up to five options; a
-    negative option of a float entry is a preset. A stringlist's options are
+    negative option of a time entry is a preset. A stringlist's options are
     its choices and its value is one of them. ``config`` and ``description``
     entries are declared by the sequence and never edited.
 

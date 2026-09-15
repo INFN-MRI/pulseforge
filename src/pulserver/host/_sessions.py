@@ -42,6 +42,7 @@ class SessionKey:
 
     @classmethod
     def parse(cls, text: str) -> SessionKey:
+        """Read a key written as ``<pid>-<day>``."""
         pid, day = text.split("-")
         return cls(int(pid), int(day))
 
@@ -88,14 +89,17 @@ class Session:
 
     @property
     def limits(self) -> dict[str, Any]:
+        """``pypulseqpp.Opts`` keyword arguments the session was opened with."""
         return dict(self._record["limits"])
 
     @property
     def current(self) -> int | None:
+        """Revision the target plays; ``None`` before the first generated one."""
         return self._record["current"]
 
     @property
     def closed(self) -> bool:
+        """Whether the host process sent ``CLOSE``."""
         return self._record["closed"]
 
     def revision_directory(self, revision: int) -> Path:
@@ -134,6 +138,7 @@ class Session:
         self._save()
 
     def save_protocol(self, text: str) -> None:
+        """Store the latest ``VALIDATE`` request block."""
         _write_atomic(self.directory / "protocol", text)
 
     def close(self) -> None:
@@ -182,7 +187,7 @@ class SessionStore:
         return session
 
     def get(self, key: SessionKey) -> Session:
-        """Return an open session.
+        """Return a session, loading it from disk on first use.
 
         Raises
         ------

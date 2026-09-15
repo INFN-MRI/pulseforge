@@ -75,11 +75,18 @@ class IntParam:
 
 @dataclass(frozen=True)
 class BoolParam:
+    """A checkbox UI entry bound to an ``init_sequence`` argument."""
+
     argument: str
 
 
 @dataclass(frozen=True)
 class StringListParam:
+    """A choice among option strings, bound to an ``init_sequence`` argument.
+
+    The argument receives the chosen string, not its index.
+    """
+
     argument: str
     options: tuple[str, ...]
 
@@ -122,6 +129,7 @@ def _to_si(value: float, scale: float) -> float:
 
 
 def _to_microseconds(seconds: float) -> int:
+    """Round to the nearest microsecond, ties to even."""
     return int((Decimal(repr(float(seconds))) / _MICROSECOND).to_integral_value())
 
 
@@ -322,6 +330,9 @@ class ScannerSequence:
 
 def load_plugin(path: Path) -> ScannerSequence:
     """Import a plugin file and instantiate the one ScannerSequence it defines.
+
+    The module is registered as ``pulserver_plugin_<file stem>``; loading
+    another file with the same stem replaces it.
 
     Raises
     ------

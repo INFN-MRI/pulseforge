@@ -26,9 +26,8 @@ there. If `pre-commit` rewrites a file, stage it and commit again.
 - A test name states the invariant it protects, so a failure reads as a
   sentence: `test_a_double_precision_basis_does_not_reach_the_kernel`.
 - Anything that can run on both CPU and CUDA is parametrised over both, and
-  the CUDA leg skips cleanly when no device is present. A numerical check that
-  only ever ran on CPU has, in this codebase's history, passed while the CUDA
-  path was completely wrong.
+  the CUDA leg skips cleanly when no device is present. A check that passes on
+  one device says nothing about the other.
 
 ## Comments and documentation
 

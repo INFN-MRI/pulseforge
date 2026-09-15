@@ -33,8 +33,8 @@ pytest with plain functions and fixtures — never `unittest.TestCase`. A test
 name states the invariant it protects, so a failure reads as a sentence.
 
 Anything numerical that can run on CPU and CUDA is parametrised over both, and
-the CUDA leg skips when no device is present. A kernel-layout check that ran on
-CPU only has passed in this codebase while CUDA was 100% wrong.
+the CUDA leg skips when no device is present. A check that passes on one device
+says nothing about the other.
 
 ## Comments
 

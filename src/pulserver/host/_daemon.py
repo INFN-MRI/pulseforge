@@ -1,16 +1,4 @@
-"""Unix-socket server answering PSD host processes.
-
-Each request is a command line, ``COMMAND <session> [plugin]``, followed by a
-block for ``OPEN`` (limits), ``VALIDATE`` and ``GENERATE`` (protocol values).
-Replies:
-
-- ``OPEN``, ``CLOSE``: ``OK``
-- ``LIST_PROTOCOL``: ``PROTOCOL`` and a listing block
-- ``VALIDATE``: ``VALID <seconds>`` or ``INVALID``, an ``INFO`` line and a value block
-- ``GENERATE``: ``GENERATED <revision>``
-
-Any command can instead reply with a single ``ERROR <message>`` line.
-"""
+"""Unix-socket server answering PSD host processes."""
 
 from __future__ import annotations
 
@@ -74,6 +62,18 @@ def format_limits(limits: dict[str, Any]) -> str:
 class HostDaemon:
     """Design sessions for every PSD host process on this host.
 
+    Each request is a command line, ``COMMAND <session> [plugin]``, followed by
+    a block for ``OPEN`` (limits) and for ``VALIDATE`` and ``GENERATE``
+    (protocol values). Replies:
+
+    - ``OPEN``, ``CLOSE``: ``OK``.
+    - ``LIST_PROTOCOL``: ``PROTOCOL`` and a listing block.
+    - ``VALIDATE``: ``VALID <seconds>`` or ``INVALID``, an ``INFO`` line and a
+      value block.
+    - ``GENERATE``: ``GENERATED <revision>``. A request that resolves to an
+      already generated protocol returns that revision and makes it current.
+
+    Any command can instead reply with a single ``ERROR <message>`` line.
     Commands of one session run one at a time; sessions run concurrently, with
     plugin code in a pool of spawned worker processes.
 
@@ -100,9 +100,11 @@ class HostDaemon:
         return ProcessPoolExecutor(self._workers, mp_context=context)
 
     def shutdown(self) -> None:
+        """Stop the worker pool without waiting for running design calls."""
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     async def serve(self, socket_path: Path) -> None:
+        """Answer commands on a Unix socket until cancelled."""
         server = await asyncio.start_unix_server(
             self._connection, path=str(socket_path)
         )
@@ -171,6 +173,10 @@ class HostDaemon:
         return path
 
     async def _run(self, function: Any, *args: Any) -> Any:
+        """Run a design call in the worker pool.
+
+        A worker that dies fails this command and the pool is replaced.
+        """
         loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(self._pool, function, *args)
@@ -180,6 +186,7 @@ class HostDaemon:
             raise CommandError("the design worker exited during this command") from None
 
     async def _listing(self, session: Session) -> dict[str, Parameter]:
+        """Return the listing of the session's plugin, cached until its file changes."""
         path = self._plugin_path(session.plugin)
         key = (path, path.stat().st_mtime_ns)
         if key not in self._listings:

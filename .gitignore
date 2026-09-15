@@ -26,3 +26,6 @@ htmlcov/
 
 # Benchmark inputs are fetched, never committed.
 data/
+
+# autosummary stubs, rebuilt by every docs build
+docs/generated/

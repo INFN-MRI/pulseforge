@@ -43,14 +43,17 @@ class HostClient:
         self._stream = None
 
     def open(self, plugin: str, limits: Mapping[str, Any]) -> None:
+        """Open the session on a plugin, with ``pypulseqpp.Opts`` keyword arguments as limits."""
         self._command(f"OPEN {self.session} {plugin}", format_limits(dict(limits)))
 
     def list_protocol(self) -> dict[str, Parameter]:
+        """Return the protocol with its schema, kept for formatting later value blocks."""
         _, block = self._command(f"LIST_PROTOCOL {self.session}", until=PROTOCOL_END)
         self._listing = parse_listing(block)
         return self._listing
 
     def validate(self, values: Mapping[str, Any]) -> Validation:
+        """Resolve values keyed by interpreter parameter names."""
         listing = self._listing or self.list_protocol()
         header, rest = self._command(
             f"VALIDATE {self.session}",
@@ -68,10 +71,12 @@ class HostClient:
         return int(header.split()[1])
 
     def close(self) -> None:
+        """Send ``CLOSE`` and drop the connection."""
         self._command(f"CLOSE {self.session}")
         self.disconnect()
 
     def disconnect(self) -> None:
+        """Drop the connection; the next command reopens it."""
         stream, self._stream = self._stream, None
         if stream is not None:
             # A request still buffered for a dead daemon is dropped with the stream.
