@@ -1,0 +1,64 @@
+name: Wheels
+
+# Reusable: the release workflow calls this so what is published was built by
+# the same job pull requests exercise.
+
+on:
+  workflow_call:
+    inputs:
+      cibw-build:
+        description: Interpreters to build, as a CIBW_BUILD pattern.
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      cibw-build:
+        description: Interpreters to build, as a CIBW_BUILD pattern.
+        type: string
+        default: "cp310-* cp311-* cp312-* cp313-*"
+
+jobs:
+  wheels:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # setuptools_scm reads the tags
+
+      - uses: pypa/cibuildwheel@v3.2.0
+        env:
+          CIBW_BUILD: ${{ inputs.cibw-build }}
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_ARCHS_MACOS: arm64
+          # Loads the compiled extension, not only the package.
+          CIBW_TEST_COMMAND: "python -c \"from pulserver._accelerators import require; print(require().__name__)\""
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error

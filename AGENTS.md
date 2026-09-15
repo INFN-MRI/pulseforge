@@ -24,6 +24,11 @@ pytest -q
 bash scripts/build_docs.sh        # figures, then Sphinx; warnings are errors
 ```
 
+The install compiles `pulserver._ext` and needs a C and C++ compiler and CMake.
+`src/c/` is ANSI C (C89): the build compiles it with `-std=c90
+-pedantic-errors`, as the scanner builds it, so a C99 construct fails here
+before it reaches the interpreter.
+
 Build and test steps are mandatory before reporting a change complete. Run them
 and report the exact output; do not assume success.
 
