@@ -20,8 +20,18 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/src/c ${CMAKE_BINARY_DIR}/c_build)
 pybind11_add_module(_ext
     ${CMAKE_SOURCE_DIR}/src/cpp/module.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/from_libraries.cpp
+    ${CMAKE_SOURCE_DIR}/src/cpp/ir/dedup.cpp
+    ${CMAKE_SOURCE_DIR}/src/cpp/ir/structure.cpp
+    ${CMAKE_SOURCE_DIR}/src/cpp/ir/collection.cpp
 )
 target_link_libraries(_ext PRIVATE pulseg)
+# The ported passes are pulseg's own: they see its private headers and the
+# vendored transform pulseq_rf.c shares with them.
+target_include_directories(_ext PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/c
+    ${CMAKE_SOURCE_DIR}/src/c/vendor
+    ${CMAKE_SOURCE_DIR}/src/c/pulseq
+)
 
 # Built into the build tree, never beside the sources: a binary left in the
 # source tree would be swept into wheels built for other interpreters.
