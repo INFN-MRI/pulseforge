@@ -1,1 +1,0 @@
-bool glob_enDbgPrint = false;

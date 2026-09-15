@@ -1,26 +1,24 @@
-# What this changes
+## What this changes
 
-<!-- What the code does now that it did not before, in a sentence or two.
-     Link the issue if there is one. -->
+<!-- One or two sentences. What behaviour is different afterwards? -->
 
 ## Why
 
-<!-- The problem it solves. For a physics or safety change, say what makes
-     the new behaviour correct: the reference, the invariant, or the
-     measurement. -->
+<!-- The problem this solves. Link the issue if there is one. -->
 
-## How it was checked
+## How it was verified
 
-<!-- Tick what you ran. `bash scripts/run_tests.sh` covers all of it, and the
-     native lanes skip themselves when a toolchain is missing. -->
+<!-- The commands you ran and what they said. Paste the output, don't
+     summarise it. "Tests pass" is not verification. -->
 
-- [ ] `bash scripts/format_and_lint.sh` — formatting and lint are clean
-- [ ] `bash scripts/run_tests.sh` — Python, C, C++ and Nim
-- [ ] New behaviour has a test whose name states the invariant
-- [ ] Fixtures regenerated with `bash scripts/regenerate_fixtures.sh` (if any changed)
-- [ ] Documentation updated (if this changes what a user does or sees)
+```
+```
 
-## Anything a reviewer should look at first
+## Checklist
 
-<!-- The part you are least sure about, a deliberate trade-off, or a number
-     that moved. If a benchmark changed, the before and after. -->
+- [ ] `bash scripts/format_and_lint.sh` is clean
+- [ ] `pytest -q` passes, and new behaviour has a test whose name states the
+      invariant it protects
+- [ ] Anything numerical is exercised on CPU and CUDA, or the CUDA leg is
+      marked `@pytest.mark.cuda` and skips cleanly
+- [ ] No comment or docstring describes the code's history

@@ -1,9 +1,7 @@
 name: Style
 
 # Runs the same script pre-commit runs, in --check mode: nothing is rewritten
-# and any file that would change fails the job. Keeping the rules in
-# scripts/format_and_lint.sh means this workflow cannot drift from what
-# contributors run locally.
+# and any file that would change fails the job.
 
 on:
   push:
@@ -14,29 +12,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  PYTHON_VERSION: "3.11"
-
 jobs:
   format-and-lint:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # No pip cache: the one this repository fills is the whole test and
-      # documentation environment, and restoring it costs more than the single
-      # wheel this job installs.
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
 
-      # The linters only, taken from the same `dev` extra a contributor's
-      # pre-commit installs, so both apply one ruff. Installing that extra
-      # whole would compile the package and download the runtime for a job
-      # that never imports either.
-      - name: Install tools
+      # The linter only, taken from the same `dev` extra a contributor's
+      # pre-commit installs, so both apply one ruff. Installing the extra whole
+      # would download the runtime for a job that never imports it.
+      - name: Install ruff
         run: |
           python -m pip install --upgrade pip
           python - <<'PY' > "$RUNNER_TEMP/lint-requirements.txt"
@@ -47,11 +35,6 @@ jobs:
           print("\n".join(line for line in dev if line.startswith("ruff")))
           PY
           python -m pip install -r "$RUNNER_TEMP/lint-requirements.txt"
-          # cmake and a C compiler are already on the runner; clang-format is
-          # not, and the C89 gate and the format pass need both.
-          sudo apt-get update && sudo apt-get install -y clang-format
 
-      # PYTHON_BIN is left unset: the script falls back to the python3 that
-      # setup-python put on PATH.
       - name: Format and lint (check only)
         run: bash scripts/format_and_lint.sh --check

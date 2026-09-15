@@ -1,190 +1,106 @@
 [build-system]
-requires = ["scikit-build-core>=1.0.3", "pybind11>=3.0", "setuptools>=84.0.0"]
-build-backend = "scikit_build_core.build"
+requires = ["setuptools>=77", "setuptools_scm[toml]>=8"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "pulserver"
-version = "0.1.0"
-description = "Pulseq MRI sequence runtime — contracts, C library, and reconstruction server"
+description = "Orchestrator for MR acquisitions: sequence design, scanner preparation, reconstruction and real-time feedback."
 readme = "README.md"
-license = { file = "LICENSE.txt" }
 requires-python = ">=3.10"
-authors = [{ name = "pulserver" }]
-
-# One installation covers both sides of the scanner. Every scanner Pulserver
-# targets runs sequence design and reconstruction alike, and both are built on
-# Torch, so there is one dependency set and one environment to install.
-dependencies = [
-  "numpy>=2.0",
-  "scipy",
-  "matplotlib",
-  "pypulseq>=1.5.0",
-  # The NUFFT comes from MRI-NUFFT rather than a second implementation here;
-  # FINUFFT is the portable CPU backend. See the `cuda` extra for GPU.
-  "mri-nufft[finufft]",
-  "torch>=2.13.0",
-  "deepinv>=0.4.1",
-  "ptwt",
-  "PyWavelets",
-  "ismrmrd>=1.15.0",
-  "h5py",
-  "pydicom",
-  "psutil",
-  "SimpleITK>=2.5.6",
-  "torchio>=1.2.1",
+dynamic = ["version"]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["mri", "pulseq", "reconstruction", "motion correction"]
+authors = [{ name = "Matteo Cencini", email = "matteo.cencini@gmail.com" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
+
+dependencies = []
 
 [project.optional-dependencies]
-# GPU reconstruction. CUFINUFFT accepts Torch tensors directly, so MRI-NUFFT's
-# CuPy extra is deliberately not used: Pulserver registers its own
-# Torch-native adapter at runtime. Everything CUDA-only is gated at import,
-# and the tests that need a device skip without one.
-cuda = ["cufinufft>=2.5.1; platform_system == 'Linux'"]
-# PyHySCO is GPL-3.0-only. It stays opt-in, and is neither imported nor
-# bundled by the MIT-licensed Pulserver package -- it is driven as an external
-# executable -- so installing it is the user's licensing decision.
-distortion = ["PyHySCO"]
 dev = [
-  "pytest>=9.1.1",
-  "pytest-cov>=7.1.0",
-  "coverage>=7.15.4",
-  "ruff>=0.16.3",
-  "pre-commit>=4.6.2",
-  "sphinx>=8.1.3",
-  "myst-parser>=4.0.1",
-  "sphinx-book-theme>=1.1.4",
-  "sphinx-gallery>=0.17.1",
-  # The C and C++ reference is the headers' own comments, pulled in through
-  # Doxygen's XML. Doxygen itself is a system package, so the pages say so
-  # and the rest of the documentation builds without it.
-  "breathe>=4.35",
-  "build>=1.5.0",
+  "pytest>=8",
+  "pytest-cov>=5",
+  "coverage>=7",
+  # Pinned, not ranged: a formatter that differs between a contributor and
+  # CI makes "one entry point" a lie. Dependabot proposes the bumps.
+  "ruff==0.16.5",
+  "pre-commit>=4",
+  "build",
 ]
 
-[tool.scikit-build]
-cmake.source-dir = "."
-sdist.include = [
-  "src/**",
-  "examples/sequence/**",
-  "examples/recon/**",
-  "tests/**",
-  "README.md",
-  "LICENSE.txt",
+[project.urls]
+Homepage = "https://github.com/pulserver/pulserver"
+Issues = "https://github.com/pulserver/pulserver/issues"
+Source = "https://github.com/pulserver/pulserver"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# No write_to: the version is read at runtime with importlib.metadata, which
+# works the same under setuptools and under scikit-build-core. A generated
+# _version.py only exists under one of them.
+[tool.setuptools_scm]
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"
+fallback_version = "0.0.0.dev0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "cuda: needs a CUDA device; skipped when none is present",
+  "slow: excluded from the default run",
 ]
 
-[tool.scikit-build.wheel]
-# scikit-build-core maps package paths to arbitrary source directories.  This
-# installs the self-contained example plugins directly as
-# ``pulserver.app.sequence.<name>`` and ``pulserver.app.recon.<name>``, which
-# ``pulserver.app`` re-exports flat, without copying or moving their source.
-packages = { "pulserver" = "src/python/pulserver", "pulserver/app/sequence" = "examples/sequence", "pulserver/app/recon" = "examples/recon" }
-# Formatting + linting using ruff.
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@overload",
+]
+
 [tool.ruff]
 line-length = 88
-fix = true
-extend-exclude = [
-  "__init__.py",
-  "docs/**",
-  "_docs/**",
-  "external/**",
-]
-exclude = ["docs/**", "_docs/**"]
+# Deliberately NOT `fix = true`: with it, `ruff check` rewrites the working
+# tree, so a command that reads as read-only is not. `format_and_lint.sh`
+# passes --fix explicitly when it means it.
+fix = false
+extend-exclude = ["docs/**", "examples/**"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
 
-# RUFF section
 [tool.ruff.lint]
-select = [
-  "A",
-  "ARG",
-  "B",
-  "C4",
-  "COM",
-  "F",
-  "I",
-  "NPY",
-  "RUF",
-  "S",
-  "SIM",
-  "PIE",
-  "PTH",
-  "Q",
-  "W",
-  "YTT",
-]
+select = ["A", "ARG", "B", "C4", "D", "E", "F", "I", "NPY", "PIE", "PTH", "Q", "RUF", "S", "SIM", "UP", "W", "YTT"]
 ignore = [
-  "E501",   # line too long
-  "W191",   # tabs
-  "E203",   # spacing before ':'
-  "COM812", # missing trailing comma
-  "Q000",
-  "Q001",
-  "Q002",   # quote rules handled by Ruff formatter
-  "I001",
-  "I002",   # import sorting intentionally not enforced
-  "S101",
-]
-extend-ignore = [
-  "E501", # line too long
-  "W191", # tabs
-  "E203", # colon spacing
+  "E501",   # line length is the formatter's business
+  "COM812", # trailing comma conflicts with the formatter
+  "D105",   # magic methods carry their meaning in their name
+  "D107",   # __init__ is documented on the class
 ]
 
-[tool.ruff.lint.isort]
-force-single-line = false
-split-on-trailing-comma = false
-
-[tool.ruff.lint.flake8-quotes]
-docstring-quotes = "double"
-inline-quotes = "double"
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "S101", "ARG"]
+"benchmarks/**" = ["D", "S101", "T201"]
+"__init__.py" = ["D104", "F401"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
-# Public handler and protocol interfaces deliberately retain their established
-# argument names.  The recon server also accepts filesystem paths supplied by
-# scanner configuration, where converting every intermediate value to Path
-# would not improve safety or clarity.
-[tool.ruff.lint.per-file-ignores]
-# Reference plugins: they satisfy the contract without needing every
-# argument it hands them.
-"src/nim/tests/**" = ["ARG001", "ARG002", "PTH123"]
-# A plugin's protocol is a declaration, and most of them do not need the
-# system limits to write one down; the contract passes them regardless.
-"examples/sequence/**" = ["ARG002"]
-"src/python/pulserver/recon/_server/connection.py" = ["A003", "PTH", "S108", "S110"]
-"src/python/pulserver/recon/_server/constants.py" = ["A001"]
-"src/python/pulserver/recon/_server/dicom2mrd.py" = ["S110"]
-"src/python/pulserver/recon/_distortion.py" = ["S603"]
-"src/python/pulserver/recon/_server/handlers/savedataonly.py" = ["ARG001"]
-"src/python/pulserver/recon/_server/main.py" = ["PTH", "S104", "S108"]
-"src/python/pulserver/recon/_server/readers.py" = ["A002", "ARG001", "PTH123"]
-"src/python/pulserver/recon/_server/replay.py" = ["PTH", "S110"]
-"src/python/pulserver/recon/_server/rtp_connection.py" = ["S104"]
-"src/python/pulserver/recon/_server/server.py" = ["ARG001", "ARG004", "PTH", "S104", "S110"]
-"src/python/pulserver/recon/_server/writers.py" = ["A002"]
-# The native lanes run the suites they just built: the executables are the
-# build scripts' own output, and the toolchain names they resolve on PATH are
-# the point of the lane.
-"tests/python/native/**" = ["S603", "S607"]
-# Monkeypatch stubs stand in for a real signature, and a fixture is often
-# requested for what constructing it sets up rather than for its value.
-"tests/python/**" = ["ARG001", "ARG005"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests/python"]
-addopts = "-ra --import-mode=importlib"
-markers = [
-  # A test that needs a real CUDA device, the `cuda` extra, or both. These
-  # skip themselves when either is missing, so the default run is complete on
-  # a machine without a GPU; the marker exists so a GPU runner can select
-  # them with `-m cuda`.
-  "cuda: requires a CUDA device and the pulserver[cuda] extra",
-  # The 128K-arm pipeline budget contract. Skips itself unless
-  # PULSERVER_BUDGET=1, because it runs minutes and holds a target the
-  # default suite has no business paying for on every run.
-  "budget: opt-in end-to-end pipeline budget guard (PULSERVER_BUDGET=1)",
-]
+[tool.ruff.lint.flake8-quotes]
+docstring-quotes = "double"
+inline-quotes = "double"

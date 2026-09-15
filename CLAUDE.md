@@ -1,191 +1,72 @@
-# Working in this repository
+<!-- Generated from AGENTS.md by scripts/sync_agent_docs.sh. Do not edit. -->
 
-Guidance for coding agents. `AGENTS.md`, `GEMINI.md` and
-`.github/copilot-instructions.md` are symbolic links to this file, so every
-assistant reads the same instructions and there is one place to change them.
+# pulserver — agent instructions
 
-## What this is
+<!--
+This file is the SOURCE. CLAUDE.md and GEMINI.md are generated from it by
+scripts/sync_agent_docs.sh, which pre-commit runs. Edit this file, never those.
+-->
 
-Pulserver takes a [Pulseq](https://pulseq.github.io) `.seq` sequence from
-design to acquisition: it builds sequences in Python, checks them against the
-hardware limits a scanner enforces, derives the structure an interpreter needs
-to play them, and streams the reconstruction what it needs to interpret the
-data. Read `docs/explanations/` before changing anything conceptual — the
-sequence model, the safety physics and the performance strategy are all
-written down there.
+## What this package is
 
-## Layout
+Orchestrator for MR acquisitions: sequence design, scanner preparation, reconstruction and real-time feedback.
 
-All source lives under `src/`, one directory per language, and each layer is
-a superset of the one below it rather than a reimplementation of it.
+Pulserver sits on top of two engines it does not reimplement: sequence design
+is [`pypulseqpp`](https://github.com/pulserver/pypulseqpp) and the
+reconstruction engine is [`bartorch`](https://github.com/mcencini/bartorch).
+Vendor-specific playout and data conversion live in the scanner-side
+interpreters; they call pulserver's public API and carry no sequence or
+reconstruction logic of their own. Code that belongs to an engine goes
+upstream into that engine, not into a copy here.
 
-| Path | What lives there |
-|---|---|
-| `src/c/` | The scanner-side C library: `.seq` parsing, the PulSeg representation, structure detection, the safety engine. **C89, no dependencies.** |
-| `src/cpp/` | C++17: `pulseqpp` (the design/write path, `src/cpp/pulseq/`) and the reconstruction-side reader and MRD client (`src/cpp/recon/`). It links `src/c` rather than restating it. |
-| `src/python/pulserver/` | The Python package. `pypulseq/` is a drop-in PyPulseq replacement over the C++ core; `design/` is the module toolbox; `recon/` is the reconstruction stack. |
-| `src/python/bindings/` | The pybind11 sources. They build into one extension module, `pulserver._ext`, whose submodules are `pulseg`, `pulseqpp`, `arbgrad`, `sampling` and `recon_cpu`. |
-| `src/nim/` | The Nim hosts that let a console drive a Python or MATLAB plugin. |
-| `examples/sequence/`, `examples/recon/` | The sequence zoo and its reconstruction plugins. Both are installed into `pulserver.app`, one flat namespace, so they are shipped code, not samples — the deliberate exception to "source lives under `src/`". |
-| `tests/` | `ctests/` (minunit), `cpptests/` (GoogleTest), `python/` (pytest, including the native lanes), `nim/`, and `utils/` with the fixture generators. |
-| `docs/` | Sphinx sources. `_docs/` is a superseded copy — do not add to it. |
-| `scripts/` | The four entry points below, plus the build steps they call. |
-
-## The four commands
-
-Everything routes through these; pre-commit and CI call the same scripts, so
-what passes locally passes in CI. Each takes `--help`.
+## Build and test
 
 ```bash
-bash scripts/run_tests.sh            # Python, C, C++ and Nim in one pytest session
-bash scripts/format_and_lint.sh      # ruff, clang-format, strict-C89 compile
-bash scripts/build_docs.sh           # Sphinx
-bash scripts/regenerate_fixtures.sh  # every checked-in fixture
+pip install -e .[dev]
+bash scripts/format_and_lint.sh   # rewrites in place; --check to verify only
+pytest -q
 ```
 
-Useful selectors: `run_tests.sh --only=python|native|c|cpp|nim`, any pytest
-argument passes through (`-k`, a path); `format_and_lint.sh --check` reports
-without rewriting.
+Build and test steps are mandatory before reporting a change complete. Run them
+and report the exact output; do not assume success.
 
-**Run the tests and report the actual output.** A change is not complete
-because it looks right. If the native toolchain is missing, those lanes skip
-themselves and say so — that is not a pass.
+## Tests
 
-## Language rules
+pytest with plain functions and fixtures — never `unittest.TestCase`. A test
+name states the invariant it protects, so a failure reads as a sentence.
 
-**`src/c/` is ANSI C (C89).** Declarations at the top of a block, no `//`
-comments, no mixed declarations and code, no `long long`. Scanner embedded
-targets are 32-bit with old toolchains, so times are integer microseconds and
-a count that can exceed two billion goes in a `double`.
-`format_and_lint.sh` compiles it with `-std=c89 -pedantic -Werror` and that
-gate must stay green.
-
-**`src/cpp/` is C++17.** The recon side may use the standard library freely; the
-design side is on the hot path for million-block sequences, so measure before
-adding an allocation per block.
-
-**Python targets 3.11+.** The package has one dependency set — there is no
-design-only or recon-only install, because a scanner runs both and two
-environments meant two copies of Torch. Only three extras exist: `cuda`,
-`distortion` (GPL, opt-in) and `dev`.
+Anything numerical that can run on CPU and CUDA is parametrised over both, and
+the CUDA leg skips when no device is present. A kernel-layout check that ran on
+CPU only has passed in this codebase while CUDA was 100% wrong.
 
 ## Comments and docstrings
 
 Write for someone reading the code as it is now, who has no memory of any
-earlier version of it. **Never** write text whose subject is the history of
-the code. Banned in comments, docstrings and prose docs alike:
+earlier version of it. **Never** write text whose subject is the history of the
+code. Banned in comments, docstrings and prose alike:
 
-- "used to", "was once", "no longer", "previously", "now that", "this
-  replaces", "the old X", "before the fix"
+- "used to", "was once", "no longer", "previously", "now that", "this replaces",
+  "the old X", "before the fix"
 - justifying the present shape by contrast with a shape that is gone
 - naming a bug that has been fixed, or the session that fixed it
 - restating what the code plainly says
 
-A docstring carries what a caller needs: one line of what, then Parameters,
-Returns, Raises. A comment earns its place only by explaining a non-obvious
-algorithm or a choice a reader would otherwise undo — and even then, prefer a
-well-named function or a test whose name states the invariant, because those
-cannot go stale silently. When tempted to explain *why not the other way*,
-write a test instead.
+A docstring carries what a caller needs: one line of what, Parameters, Returns,
+Raises. A comment earns its place only by explaining a non-obvious algorithm or
+a choice a reader would otherwise undo — and even then, prefer a well-named
+function or a test whose name states the invariant, because those cannot go
+stale silently. When tempted to explain *why not the other way*, write a test.
 
-Deleting an outdated comment is always correct; rewriting one to describe the
-change is not.
+Stale comments are actively harmful. Deleting an outdated comment is always
+correct; rewriting one to describe the change is not.
 
-## Prose documentation
+## Documentation style
 
-`docs/explanations/` is written for MR scientists, in the vocabulary of pulse
-sequences and physics. These rules are about how a page is built, not what it
-claims.
+The audience is MR scientists. Write in the vocabulary of pulse sequences and
+physics, not of software architecture. Never justify a design by describing the
+design it replaced.
 
-**Section titles are the reader's index.** Each states, in plain
-pulse-sequence vocabulary, what is in that section: a noun phrase, not a
-question, not a rhetorical frame ("What X does to Y", "Why X cannot be
-avoided"), and with no trailing filler ("..., and why"). A reader scanning the
-titles alone must know what the page contains. Prefer a title that reuses a
-term the page has already introduced, so the contents map onto the argument. A
-title agreed with the user is used verbatim — never substitute a
-better-sounding one while drafting the body under it.
-
-**Do not over-fragment.** A heading is for a section a reader would look for
-on its own. Material that flows from the section's own subject stays in it,
-unheaded, and cases that vary one parameter of the same mechanism — shorter
-than the window and longer than it — belong in one section, not one each. If
-a section has grown six subsections, most of them are paragraphs.
-
-**Figures lead, text follows.** Prefer a figure to a table and a table to a
-paragraph whenever the subject is a shape, a position, a timeline or a
-comparison. Author every figure as a function in `docs/_bench/`, so it is
-regenerated from the current code, and write the prose around it rather than
-illustrating prose after the fact.
-
-**Do not restate what a figure carries.** Exact readings live in the figure,
-where a rebuild updates them; the prose claims only ratios and orders of
-magnitude that survive a redesign. The same applies to constants: name the
-symbol, not the number.
-
-**Vendor material stays out of published prose.** Lockout file names, gradient
-coil names, band edges and stated tolerances are not ours to publish and are
-of no use to a reader outside that vendor. Describe the mechanism — a family,
-its locked parameter, what the table can and cannot express — and keep the
-values in the calibration scripts that read them.
-
-**Write a page with the user, not for them.** Agree a crude skeleton first —
-every title with one sentence of intent — then draft one section at a time,
-printed in the conversation for comment before anything is written to disk.
-
-## Tests
-
-- **Name the invariant.** `test_the_worst_case_tr_bounds_every_instance_it_stands_for`,
-  not `test_tr_2`. The name is the specification.
-- **A fast path is asserted equal to the plain one.** Every optimisation here
-  has a differential test against the calculation it replaces — the memoized
-  PNS against the exact convolution, the C SAFE model against upstream's
-  Python, the drawn resonance lines against the predownload verdict. Add one
-  with any new fast path; a fast answer that disagrees is a different check,
-  not an optimisation.
-- **`tr=None` is upstream PyPulseq to the bit.** Any change to the analysis
-  surface must keep a PyPulseq script getting PyPulseq's numbers.
-- Fixtures are generated, deterministic and checked in. After changing
-  anything that alters them, run `regenerate_fixtures.sh` and review the diff —
-  an unchanged tree means nothing moved.
-
-## Conventions that bite
-
-- **Do not annotate what can be derived.** Segmentation and the TR are
-  detected from block content, never from a `TRID` label. An annotation is a
-  second source of truth that can disagree with the sequence.
-- **Safety verdicts are estimates that run before the scanner's.** They never
-  replace the scanner's predownload gate or its hardware monitor. Do not write
-  documentation or messages that imply otherwise.
-- **`ruff` is configured with `fix = true`**, so a bare `ruff check` rewrites
-  files. Use `--no-fix` to inspect without changing anything.
-- **Generated and compiled output is not tracked.** Wheels, object files,
-  `__pycache__`, rendered docs and benchmark artifacts are all ignored; see
-  `.gitignore`. Test fixtures *are* tracked, deliberately.
-- **The examples are shipped code.** A change to `examples/sequence/*` or
-  `examples/recon/*` changes the installed `pulserver.app` namespace, and the
-  zoo tests hold it.
-- **A zoo module is one complete plugin and nothing else.** `examples/recon/*`
-  holds one `ReconPlugin` subclass, its `PLUGIN`, and its hooks — never a
-  module-level helper, a private method, or a module demonstrating one step.
-  A step a plugin needs is a name in `pulserver.recon`, general and high-level
-  enough to compose directly in a hook; a local subroutine hides which of the
-  code is the mandatory hook. `examples/sequence/*` holds whole sequences on
-  the same terms.
-- **A reconstruction plugin declares its chain and its branches; it does not
-  write them.** The per-acquisition steps go in `chain` as `Gadget`s — noise
-  adjustment, coil compression, the EPI corrections — and the boundaries worth
-  reconstructing at go in `branches`, in priority order. The default `receive`
-  runs the chain, places the readout, and routes the first boundary it closes.
-  `recon` then holds the reconstruction of each branch over buffers that are
-  already filled; it never sorts and never decides when it runs. Override
-  `receive` only for placement the declaration cannot express — both EPI
-  plugins, whose prescan and imaging share a boundary flag — and call
-  `self.process` from it so the chain still runs.
-
-## Before you finish
-
-1. `bash scripts/format_and_lint.sh` — clean.
-2. `bash scripts/run_tests.sh` — and read the output.
-3. Documentation updated if behaviour a user sees changed.
-4. Say plainly what you ran, what passed, and what you did not check.
+Do not print a measured constant that is not guaranteed across releases or
+hardware. Name the symbol and where it comes from, and let the build supply the
+number. Benchmark tables in the README are regenerated by the benchmark script,
+not typed in.

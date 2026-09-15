@@ -1,14 +1,5 @@
 name: Tests
 
-# Every job runs scripts/run_tests.sh, the same entry point used locally. The
-# lanes are split across jobs so a failure names the language it came from,
-# and so the Python matrix does not rebuild the native suites for each version.
-#
-# There is one environment: `pip install .[dev]` brings the whole runtime --
-# design and reconstruction -- plus the test and documentation tooling. The
-# GPU extra is deliberately not installed, and the tests that need a device
-# skip themselves, which is what these jobs also prove.
-
 on:
   push:
   pull_request:
@@ -19,23 +10,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-python:
+  test:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
         # The floor and the ceiling of the supported band: an intermediate
         # release that fails on neither is not a plausible failure.
-        python-version: ["3.11", "3.14"]
-
+        python-version: ["3.10", "3.13"]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # setuptools_scm reads the tags
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -45,94 +34,34 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .[dev]
 
-      - name: Run the Python lane
-        run: bash scripts/run_tests.sh --only=python --coverage
+      - name: Run the tests
+        run: pytest -q --cov --cov-report=xml
 
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v7.0.0
+      - uses: codecov/codecov-action@v5
         with:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: pulserver/pulserver
 
-  test-native:
-    name: C and C++
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install .[dev]
-
-      # The C++ suites link the recon-side reader, so the lane needs the
-      # ISMRMRD and Boost headers; without them the whole lane skips.
-      - name: Install the C++ test dependencies
-        run: sudo apt-get update && sudo apt-get install -y libismrmrd-dev libboost-dev
-
-      # The C and C++ suites are built by the lanes themselves
-      # (PULSERVER_BUILD_NATIVE=1, which run_tests.sh sets).
-      - name: Run the C and C++ lanes
-        run: bash scripts/run_tests.sh --only=native
-
-  test-nim:
-    name: Nim bridge
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install .[dev]
-
-      - name: Install Nim
-        run: |
-          curl https://nim-lang.org/choosenim/init.sh -sSf | sh -s -- -y
-          echo "$HOME/.nimble/bin" >> $GITHUB_PATH
-
-      # run_tests.sh points PULSERVER_TEST_PIP_SPEC at this checkout, so the
-      # bundle (and EnvPulserver) are built from the current branch.
-      - name: Run the Nim lane
-        run: bash scripts/run_tests.sh --only=nim
-
-  # Proves the claim the dependency layout rests on: without the `cuda` extra
-  # and without a device, nothing errors -- the GPU tests skip.
+  # Proves the claim the dependency layout rests on: with no CUDA extra and no
+  # device, nothing errors -- the GPU tests skip.
   gpu-tests-skip-cleanly:
     name: GPU tests skip without a GPU
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-
-      - name: Install without the cuda extra
-        run: |
+      - run: |
           python -m pip install --upgrade pip
           python -m pip install .[dev]
-
-      - name: Collect and run the CUDA-dependent tests
-        run: |
-          bash scripts/run_tests.sh --only=python -rs \
-            tests/python/recon/test_cuda_streaming.py \
-            tests/python/recon/test_torch_cufinufft.py
+      # Exit 5 is "nothing matched", which is also a clean outcome here: the
+      # point is that no CUDA-marked test errors on a machine without a device.
+      - run: |
+          status=0
+          pytest -q -rs -m cuda || status=$?
+          [ "$status" -eq 0 ] || [ "$status" -eq 5 ]

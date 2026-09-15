@@ -2,14 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Question or idea
     url: https://github.com/pulserver/pulserver/discussions
-    about: >
-      Anything that is not yet a bug or a concrete request -- how to build a
-      sequence, whether an approach makes sense, or what a result means.
+    about: Ask about usage, or propose something before it is a bug report.
   - name: Security vulnerability
     url: https://github.com/pulserver/pulserver/security/advisories/new
-    about: >
-      Report privately through a security advisory. Please do not open a
-      public issue.
-  - name: Documentation
-    url: https://pulserver.readthedocs.io
-    about: The explanations, tutorials and API reference.
+    about: Report privately. Please do not open a public issue.

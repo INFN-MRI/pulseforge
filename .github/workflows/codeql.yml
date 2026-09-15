@@ -1,77 +1,31 @@
 name: CodeQL
 
-# Static analysis for both languages in the repository. The C/C++ analysis is
-# the one that earns its keep: `src/c/` parses files that arrive from
-# elsewhere, in C89, without a memory-safe runtime underneath it.
-
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
-    branches: [main, dev]
-  schedule:
-    # Monday morning, so a newly published rule is found by a scheduled run
-    # rather than by the next unrelated pull request.
-    - cron: "17 6 * * 1"
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    branches: [main]
 
 jobs:
   analyze:
-    name: Analyze (${{ matrix.language }})
+    name: Analyze Python
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Code scanning on a private repository needs GitHub Advanced Security,
+    # and uploading results without it is a hard error rather than a warning.
+    # The job stands down while the repository is private and starts working
+    # on its own once it is made public.
+    if: github.event.repository.visibility == 'public'
     permissions:
       security-events: write
       packages: read
       actions: read
       contents: read
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - language: python
-            build-mode: none
-          - language: c-cpp
-            build-mode: manual
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+      - uses: actions/checkout@v5
+      - uses: github/codeql-action/init@v4
         with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-          queries: security-and-quality
-
-      # CodeQL observes an actual compilation for C/C++, so every tree that
-      # ships is compiled here: the C library, the C++ sequence library above
-      # it, and the recon-side reader, which needs the ISMRMRD headers. The
-      # pulseqpp configure builds src/c/ underneath it as well.
-      - name: Build the C and C++ libraries
-        if: matrix.language == 'c-cpp'
-        run: |
-          sudo apt-get update && sudo apt-get install -y \
-            cmake build-essential libismrmrd-dev libboost-dev
-          cmake -S src/c -B build/codeql-c -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build/codeql-c --parallel
-          cmake -S src/cpp/pulseq -B build/codeql-cpp -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build/codeql-cpp --parallel
-          mkdir -p build/codeql-recon
-          for source in src/cpp/recon/sequence_cache.cpp \
-                        src/cpp/recon/sequence_file_reader.cpp; do
-            g++ -std=c++17 -c "$source" \
-              -Isrc/cpp/include -Isrc/cpp/recon -Isrc/c/include/pulseq \
-              -o "build/codeql-recon/$(basename "$source").o"
-          done
-
-      - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v4
+          languages: python
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
         with:
-          category: "/language:${{ matrix.language }}"
+          category: "/language:python"
