@@ -40,6 +40,7 @@ set(PULSEG_SOURCES
     io/pulseg_opts.c
     io/pulseg_protocol.c
     structure/pulseg_getters.c
+    structure/pulseg_descriptor.c
     waveforms/pulseg_waveforms.c
     waveforms/pulseg_chunk.c
     safety/pulseg_check_plan.c

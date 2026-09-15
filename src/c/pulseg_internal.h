@@ -1255,4 +1255,13 @@ int pulseg__load_scanloop_cache_ext(
  * collection is left with the identity map so it stays usable).            */
 int pulseg__build_segment_remap(pulseg_collection *coll);
 
+/* The consistency checks every converted collection must satisfy.  With
+ * @p allow_variable_rf non-zero a subsequence whose RF amplitude varies across
+ * TRs is accepted and its rf_amplitude_variable flag raised instead of being
+ * rejected; pulseg_check_consistency() is this with the permissive gate.   */
+int pulseg__check_consistency(
+    pulseg_collection *coll,
+    int allow_variable_rf,
+    pulseg_diagnostic *diag);
+
 #endif /* PULSEG_INTERNAL_H */

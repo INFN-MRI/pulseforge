@@ -22,6 +22,7 @@ pybind11_add_module(_ext
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/from_libraries.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/dedup.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/structure.cpp
+    ${CMAKE_SOURCE_DIR}/src/cpp/ir/collection.cpp
 )
 target_link_libraries(_ext PRIVATE pulseg)
 # The ported passes are pulseg's own: they see its private headers and the
