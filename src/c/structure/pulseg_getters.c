@@ -2971,6 +2971,7 @@ int pulseg_get_subseq_info(const pulseg_collection *coll, pulseg_subseq_info *in
         if (info->num_tr_instances < 1)
             info->num_tr_instances = 1;
     }
+    info->rf_amplitude_variable = coll->descriptors[subseq_idx].rf_amplitude_variable;
 
     return PULSEG_SUCCESS;
 }

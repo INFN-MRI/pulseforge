@@ -20,9 +20,12 @@ import numpy as np
 from numpy.typing import NDArray
 from pypulseqpp import _ext as _core
 
-#: Use tag of an RF event, as a Pulseq file writes it.
+#: Use tag of an RF event, as a Pulseq file writes it. A pulse the file does
+#: not label is 0, which is what a reader that switches on the tag treats as
+#: "unknown"; "undefined" is what pypulseqpp calls the same thing.
 _RF_USE = {
     "": 0,
+    "undefined": 0,
     "excitation": 1,
     "refocusing": 2,
     "inversion": 3,
