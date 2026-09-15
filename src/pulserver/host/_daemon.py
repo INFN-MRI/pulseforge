@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import multiprocessing
 import re
+import shutil
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -26,6 +28,11 @@ from ._sessions import Session, SessionKey, SessionStore, revision_hash
 
 LIMITS_BEGIN = "[Limits]"
 LIMITS_END = "[Limits End]"
+IMPORT_BEGIN = "[Import]"
+IMPORT_END = "[Import End]"
+
+# The file name the target loads in a revision.
+_ENTRY = "sequence.seq"
 
 _PLUGIN_NAME = re.compile(r"[A-Za-z0-9_\-]+")
 _log = logging.getLogger("pulserver.host")
@@ -59,12 +66,27 @@ def format_limits(limits: dict[str, Any]) -> str:
     return "\n".join([LIMITS_BEGIN, *lines, LIMITS_END]) + "\n"
 
 
+def parse_import(block: str) -> Path:
+    """Read an import block: the ``file`` line naming the first file of a chain."""
+    for line in block.splitlines():
+        if line.startswith("file: "):
+            return Path(line.removeprefix("file: ").strip())
+    raise CommandError("IMPORT needs a file line")
+
+
+def format_import(path: Path | str) -> str:
+    return f"{IMPORT_BEGIN}\nfile: {path}\n{IMPORT_END}\n"
+
+
 class HostDaemon:
     """Design sessions for every PSD host process on this host.
 
     Each request is a command line, ``COMMAND <session> [plugin]``, followed by
-    a block for ``OPEN`` (limits) and for ``VALIDATE`` and ``GENERATE``
-    (protocol values). Replies:
+    a block for ``OPEN`` (limits and ``ir_`` conversion options), for
+    ``VALIDATE`` and ``GENERATE`` (protocol values) and for ``IMPORT`` (the
+    file). A session opened without a plugin only imports sequence files.
+    Every revision holds ``sequence.seq`` and the IR cache the target loads.
+    Replies:
 
     - ``OPEN``, ``CLOSE``: ``OK``.
     - ``LIST_PROTOCOL``: ``PROTOCOL`` and a listing block.
@@ -72,6 +94,9 @@ class HostDaemon:
       value block.
     - ``GENERATE``: ``GENERATED <revision>``. A request that resolves to an
       already generated protocol returns that revision and makes it current.
+    - ``IMPORT``: ``IMPORTED <revision>``. The file's ``NextSequence`` chain is
+      copied into the revision; identical files return the revision holding
+      them.
 
     Any command can instead reply with a single ``ERROR <message>`` line.
     Commands of one session run one at a time; sessions run concurrently, with
@@ -122,6 +147,7 @@ class HostDaemon:
                     "OPEN": LIMITS_END,
                     "VALIDATE": PROTOCOL_END,
                     "GENERATE": PROTOCOL_END,
+                    "IMPORT": IMPORT_END,
                 }
                 block = (
                     await self._block(reader, end[command]) if command in end else ""
@@ -148,6 +174,7 @@ class HostDaemon:
             "LIST_PROTOCOL": self._list_protocol,
             "VALIDATE": self._validate,
             "GENERATE": self._generate,
+            "IMPORT": self._import,
             "CLOSE": self._close,
         }
         try:
@@ -165,6 +192,10 @@ class HostDaemon:
             return f"ERROR {' '.join(str(error).split()) or type(error).__name__}\n"
 
     def _plugin_path(self, plugin: str) -> Path:
+        if not plugin:
+            raise CommandError(
+                "the session has no plugin; it only imports sequence files"
+            )
         if not _PLUGIN_NAME.fullmatch(plugin):
             raise CommandError(f"invalid plugin name {plugin!r}")
         path = self.plugins / f"{plugin}.py"
@@ -194,11 +225,13 @@ class HostDaemon:
         return self._listings[key]
 
     async def _open(self, key: SessionKey, args: list[str], block: str) -> str:
-        if len(args) != 1:
-            raise CommandError("OPEN needs a session and a plugin")
-        self._plugin_path(args[0])
+        if len(args) > 1:
+            raise CommandError("OPEN takes a session and at most one plugin")
+        plugin = args[0] if args else ""
+        if plugin:
+            self._plugin_path(plugin)
         try:
-            self.store.open(key, args[0], parse_limits(block))
+            self.store.open(key, plugin, parse_limits(block))
         except ValueError as error:
             raise CommandError(str(error)) from None
         return "OK\n"
@@ -241,7 +274,7 @@ class HostDaemon:
                 return f"GENERATED {revision}\n"
             staged = session.stage()
             try:
-                validation, paths = await self._run(
+                validation, paths, cache = await self._run(
                     _worker.generate,
                     path,
                     session.limits,
@@ -257,13 +290,47 @@ class HostDaemon:
                     "plugin": session.plugin,
                     "limits": session.limits,
                     "hash": digest,
-                    "files": [Path(p).name for p in paths],
+                    "files": [*(Path(p).name for p in paths), cache],
                 }
                 (staged / "meta.json").write_text(json.dumps(meta, indent=2))
             except BaseException:
                 session.discard(staged)
                 raise
             return f"GENERATED {session.commit(digest, staged)}\n"
+
+    async def _import(self, key: SessionKey, _args: list[str], block: str) -> str:
+        session = self.store.get(key)
+        source = parse_import(block)
+        async with self._locks[key]:
+            files = [Path(p) for p in await self._run(_worker.chain, str(source))]
+            contents = [
+                [f.name, hashlib.sha256(f.read_bytes()).hexdigest()] for f in files
+            ]
+            digest = revision_hash(session.plugin, session.limits, {"import": contents})
+            revision = session.find(digest)
+            if revision is not None:
+                session.select(revision)
+                return f"IMPORTED {revision}\n"
+            staged = session.stage()
+            try:
+                for file in files:
+                    shutil.copyfile(file, staged / file.name)
+                entry = staged / _ENTRY
+                if files[0].name != _ENTRY:
+                    entry.symlink_to(files[0].name)
+                await self._run(_worker.convert, session.limits, str(entry))
+                meta = {
+                    "plugin": session.plugin,
+                    "limits": session.limits,
+                    "hash": digest,
+                    "source": str(source),
+                    "files": sorted(p.name for p in staged.iterdir()),
+                }
+                (staged / "meta.json").write_text(json.dumps(meta, indent=2))
+            except BaseException:
+                session.discard(staged)
+                raise
+            return f"IMPORTED {session.commit(digest, staged)}\n"
 
     async def _close(self, key: SessionKey, _args: list[str], _block: str) -> str:
         self.store.get(key).close()

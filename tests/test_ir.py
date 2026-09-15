@@ -8,7 +8,7 @@ import pypulseqpp as pp
 import pytest
 from pypulseqpp import sequences
 
-from pulserver.ir import cache_path, convert, summary
+from pulserver.ir import cache_path, chain, convert, summary
 
 ROOT = Path(__file__).parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "sequences"
@@ -49,6 +49,14 @@ def test_a_converted_cache_reads_back_as_the_parse_it_came_from(name, tmp_path):
     signed = seq.suffix == ".seq"
     assert convert(seq, SYSTEM, verify_signature=signed) == cache_path(seq)
     assert summary(seq, SYSTEM, cache_ext=".pseg") == summary(seq, SYSTEM)
+
+
+def test_the_chain_lists_every_file_in_play_order(tmp_path):
+    seq = _copy("dedup_gre_pair.seq", tmp_path)
+    assert [p.name for p in chain(seq)] == [
+        "dedup_gre_pair.seq",
+        "dedup_gre_pair_b.seq",
+    ]
 
 
 def test_the_cache_is_named_by_the_extension_it_was_given(tmp_path):

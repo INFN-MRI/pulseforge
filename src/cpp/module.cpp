@@ -9,10 +9,12 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "pulseg.h"
 #include "pulseg_cache.h"
@@ -204,6 +206,34 @@ PYBIND11_MODULE(_ext, module)
                 label_column_map,
                 PULSEG_CACHE_EXT_DEFAULT);
             return summarize(read(seq_path, opts, false, false).get());
+        });
+
+    module.def(
+        "chain",
+        [](const std::string &first_path)
+        {
+            // NextSequence names are relative to the first file's directory,
+            // as the converter resolves them.
+            const std::filesystem::path base = std::filesystem::path(first_path).parent_path();
+            std::vector<std::string> files{first_path};
+            std::string current = first_path;
+            for (int hop = 0; hop < 1000; ++hop)
+            {
+                pulseq_file file;
+                pulseq_file_init(&file, nullptr);
+                const int rc = pulseq_read_definitions_only(&file, current.c_str());
+                const std::string next =
+                    PULSEQ_FAILED(rc) ? std::string() : file.reserved_definitions_library.next_sequence;
+                pulseq_file_free(&file);
+                if (PULSEQ_FAILED(rc))
+                    throw std::invalid_argument(
+                        "cannot read the definitions of " + current + " [error " + std::to_string(rc) + "]");
+                if (next.empty())
+                    return files;
+                current = (base / next).string();
+                files.push_back(current);
+            }
+            throw std::invalid_argument("the NextSequence chain from " + first_path + " does not end");
         });
 
     module.def(

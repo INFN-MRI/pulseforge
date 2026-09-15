@@ -1,4 +1,5 @@
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,20 @@ from pulserver.host.client import HostClient, HostError
 from pulserver.protocol import TEPreset
 
 PLUGINS = Path(__file__).parent / "plugins"
+FIXTURES = Path(__file__).parent / "fixtures" / "sequences"
+# The limits the IR fixtures convert under.
+FIXTURE_LIMITS = {
+    "max_grad": 40.0,
+    "grad_unit": "mT/m",
+    "max_slew": 170.0,
+    "slew_unit": "T/m/s",
+    "B0": 3.0,
+    "rf_raster_time": 1e-6,
+    "grad_raster_time": 1e-5,
+    "adc_raster_time": 1e-7,
+    "block_duration_raster": 1e-5,
+}
+GE_IR = {"ir_vendor": 2, "ir_label_column_map": "8 0 6", "ir_cache_ext": ".pge"}
 LIMITS = {
     "max_grad": 40.0,
     "grad_unit": "mT/m",
@@ -88,6 +103,7 @@ def test_repeated_predownloads_generate_one_revision(daemon):
     assert sorted(p.name for p in (directory / "rev" / "1").iterdir()) == [
         "meta.json",
         "resolved.protocol",
+        "sequence.pseg",
         "sequence.seq",
     ]
     assert "TE: 2500" in (directory / "rev" / "1" / "resolved.protocol").read_text()
@@ -137,3 +153,47 @@ def test_an_invalid_protocol_generates_nothing(daemon):
 def test_a_command_for_a_session_never_opened_is_an_error(daemon):
     with pytest.raises(HostError, match="not open"):
         daemon.client(pid=601).list_protocol()
+
+
+def test_a_generated_revision_carries_its_cache(daemon):
+    client = daemon.client(pid=701)
+    client.open("tiny", {**LIMITS, **GE_IR})
+    assert client.generate({"TE": 8000}) == 1
+    revision = _session_dir(daemon, client) / "rev" / "1"
+    assert sorted(p.name for p in revision.iterdir()) == [
+        "meta.json",
+        "resolved.protocol",
+        "sequence.pge",
+        "sequence.seq",
+    ]
+    vendor = struct.unpack("<6i", (revision / "sequence.pge").read_bytes()[:24])[4]
+    assert vendor == 2
+
+
+def test_an_imported_chain_is_staged_and_converted(daemon):
+    client = daemon.client(pid=801)
+    client.open(None, FIXTURE_LIMITS)
+    assert client.import_sequence(FIXTURES / "dedup_gre_pair.seq") == 1
+    current = _session_dir(daemon, client) / "current"
+    assert sorted(p.name for p in current.iterdir()) == [
+        "dedup_gre_pair.seq",
+        "dedup_gre_pair_b.seq",
+        "meta.json",
+        "sequence.pseg",
+        "sequence.seq",
+    ]
+    assert (current / "sequence.seq").readlink().as_posix() == "dedup_gre_pair.seq"
+
+
+def test_importing_the_same_file_reuses_its_revision(daemon):
+    client = daemon.client(pid=802)
+    client.open(None, FIXTURE_LIMITS)
+    first = client.import_sequence(FIXTURES / "dedup_gre_pair.seq")
+    assert client.import_sequence(FIXTURES / "dedup_gre_pair.seq") == first == 1
+
+
+def test_a_session_without_a_plugin_refuses_design_commands(daemon):
+    client = daemon.client(pid=803)
+    client.open(None, FIXTURE_LIMITS)
+    with pytest.raises(HostError, match="no plugin"):
+        client.list_protocol()

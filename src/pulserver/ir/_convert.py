@@ -29,6 +29,17 @@ def cache_path(seq_path: Path | str, cache_ext: str = ".pseg") -> Path:
     return Path(seq_path).with_suffix(cache_ext)
 
 
+def chain(seq_path: Path | str) -> list[Path]:
+    """Return the files of the ``NextSequence`` chain starting at a sequence file, in play order.
+
+    Raises
+    ------
+    ValueError
+        If a file of the chain cannot be read, or the chain does not end.
+    """
+    return [Path(p) for p in require("chain")(str(seq_path))]
+
+
 def convert(
     seq_path: Path | str,
     system: pp.Opts,

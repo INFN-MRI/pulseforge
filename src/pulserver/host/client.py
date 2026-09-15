@@ -16,7 +16,7 @@ from ..protocol import (
     parse_listing,
     parse_validation,
 )
-from ._daemon import format_limits
+from ._daemon import format_import, format_limits
 from ._sessions import SessionKey
 
 
@@ -42,9 +42,15 @@ class HostClient:
         self._listing: dict[str, Parameter] | None = None
         self._stream = None
 
-    def open(self, plugin: str, limits: Mapping[str, Any]) -> None:
-        """Open the session on a plugin, with ``pypulseqpp.Opts`` keyword arguments as limits."""
-        self._command(f"OPEN {self.session} {plugin}", format_limits(dict(limits)))
+    def open(self, plugin: str | None, limits: Mapping[str, Any]) -> None:
+        """Open the session.
+
+        ``limits`` are ``pypulseqpp.Opts`` keyword arguments plus optional ``ir_``
+        conversion options. A session opened without a plugin only imports
+        sequence files.
+        """
+        command = f"OPEN {self.session}" + (f" {plugin}" if plugin else "")
+        self._command(command, format_limits(dict(limits)))
 
     def list_protocol(self) -> dict[str, Parameter]:
         """Return the protocol with its schema, kept for formatting later value blocks."""
@@ -68,6 +74,11 @@ class HostClient:
         header, _ = self._command(
             f"GENERATE {self.session}", format_values(values, listing)
         )
+        return int(header.split()[1])
+
+    def import_sequence(self, path: Path | str) -> int:
+        """Return the revision holding a sequence file, its chain and their cache."""
+        header, _ = self._command(f"IMPORT {self.session}", format_import(path))
         return int(header.split()[1])
 
     def close(self) -> None:
