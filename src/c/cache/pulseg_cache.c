@@ -1564,7 +1564,9 @@ static int write_cache(const char *cache_path, const pulseg_collection *coll, in
         return 0;
 
     marker = PULSEG_CACHE_ENDIAN_MARKER;
-    vendor = PULSEG_VENDOR;
+    /* The tag a reader checks against its own build: the vendor the
+     * collection was converted for, not the vendor of this build. */
+    vendor = coll->num_subsequences > 0 ? coll->descriptors[0].vendor : PULSEG_VENDOR;
     version_major = PULSEG_CACHE_VERSION_MAJOR;
     version_minor = PULSEG_CACHE_VERSION_MINOR;
     version_revision = PULSEG_CACHE_VERSION_REVISION;

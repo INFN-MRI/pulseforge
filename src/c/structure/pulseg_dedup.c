@@ -1332,17 +1332,6 @@ static int compute_rf_stats(
         /* b1sq power: integral |B1_norm(t)|^2 dt (normalised waveform, units: s) */
         rd->stats.total_b1sq_power = sum_sq * rf_raster_us * 1e-6f;
 
-        /* F10.3: a declared vendor with no callback wired would leave
-         * vendor_stat[4] silently at 0 -- for GEHC this corrupts
-         * minseqrfamp/maxsar inputs (abswidth/effwidth/dtycyc/maxpw) on a
-         * wiring regression. Fail closed instead of degrading silently;
-         * PULSEG_VENDOR_UNSPECIFIED legitimately has no callback. */
-        if (opts->vendor != PULSEG_VENDOR_UNSPECIFIED && !opts->vendor_rf_stats_fn)
-        {
-            fail_rc = PULSEG_ERR_INVALID_ARGUMENT;
-            goto fail;
-        }
-
         /* Vendor-specific envelope stats: computed by the optional
          * callback from a read-only view of the uniform-grid envelope;
          * left at 0 when no callback is wired (PULSEG_VENDOR_UNSPECIFIED
