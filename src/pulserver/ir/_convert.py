@@ -12,12 +12,11 @@ from .._accelerators import require
 from ._source import conversion_payload
 
 
-def _limits(system: pp.Opts) -> tuple[float, ...]:
+def _scanner(system: pp.Opts) -> tuple[float, ...]:
+    """Gyromagnetic ratio, field strength and the four rasters, in Hz/T, T and us."""
     return (
         float(system.gamma),
         float(system.B0),
-        float(system.max_grad),
-        float(system.max_slew),
         system.rf_raster_time * 1e6,
         system.grad_raster_time * 1e6,
         system.adc_raster_time * 1e6,
@@ -90,7 +89,7 @@ def convert(
     target.unlink(missing_ok=True)
     require("convert")(
         str(seq_path),
-        *_limits(system),
+        *_scanner(system),
         int(vendor),
         list(label_column_map),
         cache_ext,
@@ -129,7 +128,7 @@ def convert_sequence(
     require("convert_libraries")(
         payload,
         str(seq_path),
-        *_limits(system),
+        *_scanner(system),
         int(vendor),
         list(label_column_map),
         cache_ext,
@@ -167,7 +166,7 @@ def summary(
     seq_path = Path(seq_path)
     if cache_ext is None:
         return require("summary_from_parse")(
-            str(seq_path), *_limits(system), list(label_column_map)
+            str(seq_path), *_scanner(system), list(label_column_map)
         )
     return require("summary_from_cache")(
         str(cache_path(seq_path, cache_ext)), seq_path.stat().st_size

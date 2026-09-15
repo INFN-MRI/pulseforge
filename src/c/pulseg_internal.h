@@ -22,7 +22,6 @@
 #include "pulseg_config.h"
 #include "pulseg_types.h"
 #include "pulseg_io.h"
-#include "pulseg/pulseg_pns_models.h"
 
 /* Error codes are public (pulseg_errors.h, included via pulseg_types.h). */
 
@@ -537,8 +536,8 @@ typedef struct pulseg_sequence_descriptor
     /* Per-position variable-gradient flags  [tr_size * 3].
      * Layout: flags[pos * 3 + axis] where axis 0=gx, 1=gy, 2=gz.
      * Value 1 means the gradient amplitude varies across TR instances
-     * at that (position, axis); 0 means constant (or absent).  Used by
-     * ZERO_VAR amplitude mode to zero out only the variable axes. */
+     * at that (position, axis); 0 means constant (or absent).  Reported by
+     * pulseg_get_block_info() as gx_variable, gy_variable and gz_variable. */
     int *variable_grad_flags;
 
     /* label table (populated by dry-run if parse_labels is set) */
@@ -815,7 +814,6 @@ float pulseg__max_slew_real_nonuniform(const float *s, const float *t, int n);
 float pulseg__get_max_abs_real(const float *samples, int n);
 void pulseg__quaternion_to_matrix(float *matrix, const float *quat);
 int pulseg__is_identity3(const float *matrix);
-void pulseg__apply_rotation(float *out, const float *R, const float *v, int transpose);
 void pulseg__interp1_linear(
     float *out,
     const float *x,
@@ -832,67 +830,8 @@ void pulseg__interp1_linear_complex(
     const float *fp_re,
     const float *fp_im,
     int nxp);
-void pulseg__fftshift_complex(float *re, float *im, int n);
 
-/* Double-precision complex FFT: the vendored kissfft compiled a second time
- * (src/vendor/external_kiss_fft_double.c), because the copy the display path
- * uses is float and these sums are carried in double on purpose. Buffers are
- * interleaved (re, im) doubles; `cfg` is opaque. Sizes need not be powers of
- * two -- ask pulseg__fft_double_size for the cheapest one that fits. */
-int pulseg__fft_double_size(int at_least);
-void *pulseg__fft_double_alloc(int nfft, int inverse);
-void pulseg__fft_double_run(void *cfg, const double *in_interleaved, double *out_interleaved);
-void pulseg__fft_double_free(void *cfg);
-
-/* Chirp-z: P_j = sum_{k<n} a[k] * e^{i k (theta0 + j*dtheta)} for j < m.
- *
- * Evaluates a real-coefficient polynomial at `m` points spaced evenly in
- * angle on the unit circle, in O((n+m) log(n+m)) rather than O(n*m). Used
- * where one waveform definition has to be transformed at many frequencies
- * that happen to form an arithmetic progression. */
-int pulseg__czt_unit(
-    double *out_re,
-    double *out_im,
-    const float *a,
-    int n,
-    double theta0,
-    double dtheta,
-    int m);
-
-/* The same transform with the geometry held, for a caller evaluating several
- * `theta0` over one (n, m, dtheta) -- which is every caller that walks a
- * frequency comb, since the offsets within it share a spacing. Holding the
- * plan keeps the chirp, the transformed kernel and the FFT setup, leaving
- * two transforms per apply. */
-typedef struct pulseg__czt_plan pulseg__czt_plan;
-
-int pulseg__czt_plan_create(pulseg__czt_plan **out_plan, int n, int m, double dtheta);
-int pulseg__czt_plan_apply(
-    pulseg__czt_plan *plan,
-    double *out_re,
-    double *out_im,
-    const float *a,
-    double theta0);
-void pulseg__czt_plan_free(pulseg__czt_plan *plan);
-float pulseg__get_spectrum_flank(
-    const float *x,
-    const float *re,
-    const float *im,
-    int n,
-    float cutoff,
-    int reverse);
 size_t pulseg__next_pow2(size_t x);
-int pulseg__calc_convolution_fft(
-    float *output,
-    const float *signal,
-    int signal_len,
-    const float *kernel,
-    int kernel_len);
-
-/* pulseg_conv_fft_plan is public (pulseg_pns_models.h): a vendor-supplied
- * PNS model is a caller-side implementation and needs the same convolution
- * the published models use. pulseg__calc_convolution_fft() is
- * create/apply/free around it and is numerically identical. */
 
 /* pulseg_parse.c's public entry points (pulseq_read family,
  * accessors, pulseq_decompress_shape, etc.) are declared in the
@@ -937,302 +876,15 @@ void pulseg__free_exec_stream_scratch(pulseg_sequence_descriptor *desc);
 int pulseg__build_label_table(pulseg_sequence_descriptor *desc, const pulseq_file *seq);
 int pulseg__calc_segment_timing(pulseg_sequence_descriptor *desc, pulseg_diagnostic *diag);
 
+/* Per position and axis within the TR, whether the gradient amplitude varies
+ * across TR instances. Allocates desc->variable_grad_flags (tr_size * 3 ints)
+ * and runs after pulseg__get_tr_in_sequence. */
+int pulseg__compute_variable_grad_flags(pulseg_sequence_descriptor *desc);
+
 /* --- pulseg_core.c (continued) --- */
 /* pulseg__get_collection_descriptors was promoted+renamed to the public
  * pulseg_convert_collection() (pulseg_convert.h). */
 void pulseg_sequence_descriptor_free(pulseg_sequence_descriptor *desc);
-
-/* --- pulseg_waveforms.c --- */
-
-/* Compute per-position variable-gradient flags for ZERO_VAR mode.
- * Allocates desc->variable_grad_flags (tr_size * 3 ints).
- * Must be called after pulseg__get_tr_in_sequence. */
-int pulseg__compute_variable_grad_flags(pulseg_sequence_descriptor *desc);
-
-/* Label the TR instances by the gradient *definitions* they play, so that a
- * caller can evaluate one canonical window per group. Instances in one group
- * differ only in amplitude, which the per-position maximum bounds; instances
- * in different groups play different shapes, which it does not.
- *
- * @p out_labels is [num_trs] and @p out_first is [*out_num_groups], the first
- * instance of each group; both are NULL (and *out_num_groups is 1) when every
- * instance falls in one group, which is the plain whole-scan envelope. The
- * caller frees both. Returns PULSEG_ERR_INVALID_ARGUMENT when the sequence
- * has more groups than @p max_groups. */
-#define PULSEG__MAX_SHAPE_GROUPS 64
-
-int pulseg__group_tr_instances_by_shape(
-    const pulseg_sequence_descriptor *desc,
-    int **out_labels,
-    int **out_first,
-    int *out_num_groups,
-    int max_groups);
-
-/* Free uniform waveforms. */
-void pulseg__uniform_grad_waveforms_free(pulseg__uniform_grad_waveforms *w);
-
-/* Per-block gradient rendering primitives. Exposed (rather than static)
- * so the PNS template builder in pulseg_pns_memo.c renders a definition's
- * unit-amplitude waveform through the very same code the full-window
- * extraction uses, and the two cannot drift apart. */
-int pulseg__count_grad_samples_for_block(
-    const pulseg_sequence_descriptor *desc,
-    const pulseg_grad_definition *gdef,
-    float block_duration_us);
-int pulseg__fill_grad_waveform_for_block(
-    const pulseg_sequence_descriptor *desc,
-    float *time,
-    float *waveform,
-    int start_idx,
-    const pulseg_grad_definition *gdef,
-    const pulseg_grad_table_element *gte,
-    float t0,
-    const float *pos_max_amp,
-    float block_duration_us);
-/* Resample a (time, amplitude) point list onto a uniform grid in place;
- * reallocates *time / *waveform and updates *num_samples. */
-int pulseg__interpolate_to_uniform(
-    float **time,
-    float **waveform,
-    int *num_samples,
-    float target_raster_us);
-
-/* --- pulseg_prescription.c --- */
-/* Install opts->prescription_rotation on every descriptor of coll for the
- * duration of a check (no-op without one, or for the identity; nested calls
- * count) and hand the logical tables back. Every public check entry wraps
- * its body in this pair. */
-int pulseg__prescription_enter(pulseg_collection *coll, const pulseg_opts *opts);
-void pulseg__prescription_leave(pulseg_collection *coll, const pulseg_opts *opts);
-
-/* --- pulseg_pns_exact.c --- */
-
-/* The shape of pulseg_opts.parallel_for_fn, for the loops that take it. */
-typedef void (*pulseg__parallel_for_fn)(
-    void *ctx,
-    int count,
-    void (*body)(void *arg, int begin, int end),
-    void *arg);
-
-/* The hook a check runs under: the caller's, else the library's own when it
- * was built with PULSEG_HAVE_PTHREADS, else NULL (a sequential loop). */
-pulseg__parallel_for_fn pulseg__parallel_for_default(void);
-pulseg__parallel_for_fn pulseg__opts_par_fn(const pulseg_opts *opts);
-void *pulseg__opts_par_ctx(const pulseg_opts *opts);
-
-/* The stimulation check of a scan past the shape-group cap: every block's
- * exact response placed on the scan's timeline, rotated into the physical
- * frame, root-sum-squared, at its peak. out_peak is in percent of the
- * model's threshold; out_peak_block the block the peak falls in. A model
- * with a kernel runs by FFT under the parallel hook; one without runs its
- * own evaluator over rendered chunks, sequentially. */
-int pulseg__pns_exact_scan_peak(
-    pulseg_check_plan *plan,
-    pulseg_diagnostic *diag,
-    const pulseg_sequence_descriptor *desc,
-    int subseq_idx,
-    const pulseg_pns_model *model,
-    pulseg__parallel_for_fn par_fn,
-    void *par_ctx,
-    float gamma,
-    double *out_peak,
-    int *out_peak_block);
-
-/* The same, judged: PULSEG_ERR_PNS_THRESHOLD_EXCEEDED with the block named
- * in the diagnostic when the peak is over threshold_percent. */
-int pulseg__pns_exact_scan_check(
-    pulseg_check_plan *plan,
-    pulseg_diagnostic *diag,
-    const pulseg_sequence_descriptor *desc,
-    int subseq_idx,
-    const pulseg_pns_model *model,
-    pulseg__parallel_for_fn par_fn,
-    void *par_ctx,
-    float gamma,
-    float threshold_percent,
-    double *out_peak,
-    int *out_peak_block);
-
-/* Exact response peak of blocks [start, start + count), rendered and run
- * through the model's own evaluator, judged from judge_from_us into the
- * range up to judge_until_us (0 = to the end). Test-facing, and the route a
- * model without a kernel takes. */
-int pulseg__pns_exact_range_peak(
-    pulseg_check_plan *plan,
-    pulseg_diagnostic *diag,
-    const pulseg_sequence_descriptor *desc,
-    int subseq_idx,
-    int start,
-    int count,
-    double judge_from_us,
-    double judge_until_us,
-    const pulseg_pns_model *model,
-    float gamma,
-    double *out_peak,
-    double *out_peak_time_us);
-
-/* A uniform frequency grid: count points from f0_hz, df_hz apart. */
-typedef struct
-{
-    double f0_hz;
-    double df_hz;
-    int count;
-} pulseg__mech_scan_grid;
-
-/* Probe flag: every event's transform evaluated directly, never from its
- * FFT record. */
-#define PULSEG__MECH_SCAN_DIRECT 1
-
-/* The sustained amplitude per axis at every point of the grids, over the
- * whole scan, each grid's window window_us[g] wide (NULL or 0 = the axis's
- * longest event; a reading below one period of the window is zero), no grid
- * guard; out_span_max_us carries one span per grid:
- * the quantity the past-the-cap mechanical-resonance check judges, at the
- * frequencies given. Outputs run grid by grid. Test-facing. */
-int pulseg__mech_scan_window_probe(
-    const pulseg_sequence_descriptor *desc,
-    const pulseg__mech_scan_grid *grids,
-    int num_grids,
-    const double *window_us,
-    int flags,
-    pulseg__parallel_for_fn par_fn,
-    void *par_ctx,
-    float *out_amp_gx,
-    float *out_amp_gy,
-    float *out_amp_gz,
-    double *out_span_max_us);
-
-/* The scan window's interpolation kernel at x bins from a sample, and the
- * bound on what truncating it to its half-width costs per unit of a
- * waveform's gradient L1. Test-facing. */
-double pulseg__mech_scan_kernel(double x);
-double pulseg__mech_scan_kernel_e(void);
-
-/* --- pulseg_pns_memo.c --- */
-
-/* Assemble a linear PNS model's response from one convolution per distinct
- * gradient shape instead of one transform over the whole canonical window.
- * Writes n samples per axis and sets *applied to 1 on success. Sets
- * *applied to 0 (returning PULSEG_SUCCESS) when the decomposition does not
- * apply -- an off-grid block boundary, too little repetition, a window too
- * short to be worth it -- and the caller must then run the exact path. */
-int pulseg__calc_pns_memoized(
-    float *out_x,
-    float *out_y,
-    float *out_z,
-    int n,
-    int *applied,
-    const pulseg_sequence_descriptor *desc,
-    int block_start,
-    int block_count,
-    const int *block_order,
-    const pulseg__uniform_grad_waveforms *uw,
-    float gamma_hz_per_tesla,
-    const float *kernel,
-    int kernel_len,
-    float out_scale,
-    int pad,
-    double *out_macs);
-
-/* Extract gradient waveforms for an arbitrary block range,
- * interpolated to uniform raster (half gradient raster). */
-int pulseg__collect_grad_corners_range(
-    const pulseg_sequence_descriptor *desc,
-    pulseg__grad_corner_arrays *out,
-    pulseg_diagnostic *diag,
-    int block_start,
-    int block_count,
-    int amplitude_mode,
-    const int *tr_group_labels,
-    int target_group,
-    const int *block_order);
-
-void pulseg__grad_corner_arrays_free(pulseg__grad_corner_arrays *c);
-
-int pulseg__get_gradient_waveforms_range(
-    const pulseg_sequence_descriptor *desc,
-    pulseg__uniform_grad_waveforms *out,
-    pulseg_diagnostic *diag,
-    int block_start,
-    int block_count,
-    int amplitude_mode,
-    const int *tr_group_labels,
-    int target_group,
-    const int *block_order);
-
-/* --- pulseg_check_plan.c ---
- * The shared preprocessing behind pulseg_check_plan. Both accessors take a
- * non-NULL plan; the public checks create a private one when the caller
- * passes none, so no path below ever sees NULL. */
-
-/* Repetitions grouped by the set of gradient shapes they play. The returned
- * arrays are the plan's and stay valid for its lifetime. */
-int pulseg__plan_shape_groups(
-    pulseg_check_plan *plan,
-    const int **out_labels,
-    const int **out_group_first,
-    int *out_num_groups,
-    pulseg_diagnostic *diag,
-    const pulseg_sequence_descriptor *desc,
-    int subseq_idx);
-
-/* Uniform-raster gradient waveforms over one window, extracted on first
- * request and retained. The result is borrowed and must not be freed; it
- * stays valid until the next pulseg__plan_waveforms() call on the same plan,
- * which may evict it. */
-int pulseg__plan_waveforms(
-    pulseg_check_plan *plan,
-    const pulseg__uniform_grad_waveforms **out,
-    pulseg_diagnostic *diag,
-    const pulseg_sequence_descriptor *desc,
-    int subseq_idx,
-    int block_start,
-    int block_count,
-    int amplitude_mode,
-    const int *labels,
-    int target_group);
-
-/* --- pulseg_safety.c ---
- * Optional internal observer used by the documentation benchmark.  Keeping
- * the clock outside libpulseg means the production build remains free of OS
- * timing APIs while the benchmark can measure the real headless
- * pulseg_check_safety path rather than composing plotting-oriented calls. */
-enum pulseg__safety_profile_stage
-{
-    PULSEG__SAFETY_PROFILE_GRAD_PRESENCE = 0,
-    PULSEG__SAFETY_PROFILE_MAX_GRAD,
-    PULSEG__SAFETY_PROFILE_CONTINUITY,
-    PULSEG__SAFETY_PROFILE_MAX_SLEW,
-    PULSEG__SAFETY_PROFILE_WAVEFORM_EXTRACT,
-    PULSEG__SAFETY_PROFILE_MECH_RESONANCE,
-    PULSEG__SAFETY_PROFILE_PNS,
-    PULSEG__SAFETY_PROFILE_PNS_BASIS_BUILD,
-    PULSEG__SAFETY_PROFILE_PNS_SCORE,
-    PULSEG__SAFETY_PROFILE_STAGE_COUNT
-};
-
-typedef void (
-    *pulseg__safety_profile_fn)(void *ctx, enum pulseg__safety_profile_stage stage, int entering);
-
-/* Arithmetic a stage issued, in multiply-accumulates, reported when it leaves.
- * Counted by the code doing the work rather than derived from the shapes it
- * ran over, so a throughput figure divides one measured clock by one measured
- * operation count. A stage that cannot count itself reports nothing, which is
- * distinguishable from reporting zero. */
-typedef void (
-    *pulseg__safety_work_fn)(void *ctx, enum pulseg__safety_profile_stage stage, double macs);
-
-int pulseg__check_safety_profiled(
-    pulseg_collection *coll,
-    pulseg_diagnostic *diag,
-    pulseg_check_plan *plan,
-    const pulseg_opts *opts,
-    const pulseg_forbidden_band_list *bands,
-    const pulseg_pns_model *pns_model,
-    float pns_threshold_percent,
-    pulseg__safety_profile_fn profile_fn,
-    pulseg__safety_work_fn work_fn,
-    void *profile_ctx);
 
 /* --- pulseg_cache.c --- */
 int pulseg__try_read_cache(pulseg_collection *coll, const char *seq_path, const char *cache_ext);

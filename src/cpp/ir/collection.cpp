@@ -137,8 +137,8 @@ static int convert_collection(
             goto fail;
 
         /* get_exec_stream_segments may adjust TR topology (e.g. sparse
-         * multipass patterns can update tr_descriptor.tr_size). Refresh
-         * variable-gradient flags so ZERO_VAR indexing matches final TR size. */
+         * multipass patterns can update tr_descriptor.tr_size). Refresh the
+         * variable-gradient flags so they index the final TR size. */
         result = pulseg__compute_variable_grad_flags(&desc);
         if (PULSEG_FAILED(result))
         {

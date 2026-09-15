@@ -831,6 +831,135 @@ static int seg_period_holds(const pulseg_sequence_descriptor *desc, int period)
     return 1;
 }
 
+/* ================================================================== */
+/*  Per-position variable-gradient flags                              */
+/* ================================================================== */
+
+/**
+ * For each (position, axis) within the canonical TR, whether the gradient
+ * amplitude varies across TR instances -- what pulseg_get_block_info()
+ * reports as gx_variable, gy_variable and gz_variable.
+ *
+ * The amplitude of the first TR instance holding a gradient at (pos, axis)
+ * is the reference; any later instance that differs raises the flag.
+ */
+int pulseg__compute_variable_grad_flags(pulseg_sequence_descriptor *desc)
+{
+    int tr_size, n, pos, si, raw_id, tr_pos;
+    const pulseg_block_table_element *bte;
+    const pulseg_grad_table_element *gte;
+
+    if (!desc)
+        return PULSEG_ERR_NULL_POINTER;
+
+    tr_size = desc->tr_descriptor.tr_size;
+
+    /* free any prior allocation */
+    if (desc->variable_grad_flags)
+    {
+        PULSEG_FREE(desc->variable_grad_flags);
+        desc->variable_grad_flags = NULL;
+    }
+
+    if (tr_size <= 0 || desc->exec_stream_len <= 0)
+        return PULSEG_SUCCESS;
+
+    n = tr_size * 3;
+    desc->variable_grad_flags = (int *)PULSEG_ALLOC((size_t)n * sizeof(int));
+    if (!desc->variable_grad_flags)
+        return PULSEG_ERR_ALLOC_FAILED;
+    for (pos = 0; pos < n; ++pos)
+        desc->variable_grad_flags[pos] = 0;
+
+    {
+        /* Per-position tracking arrays (stack-allocated for tr_size <= 64,
+         * heap otherwise).  For typical sequences tr_size is small (< 32). */
+        float fa[3 * 64]; /* first_amp[pos*3 + axis] */
+        int sv[3 * 64];   /* seen[pos*3 + axis]      */
+        float *pfa = fa;
+        int *psv = sv;
+        int heap = 0;
+
+        if (tr_size > 64)
+        {
+            pfa = (float *)PULSEG_ALLOC((size_t)(tr_size * 3) * sizeof(float));
+            psv = (int *)PULSEG_ALLOC((size_t)(tr_size * 3) * sizeof(int));
+            if (!pfa || !psv)
+            {
+                PULSEG_FREE(pfa);
+                PULSEG_FREE(psv);
+                PULSEG_FREE(desc->variable_grad_flags);
+                desc->variable_grad_flags = NULL;
+                return PULSEG_ERR_ALLOC_FAILED;
+            }
+            heap = 1;
+        }
+
+        for (pos = 0; pos < tr_size * 3; ++pos)
+        {
+            pfa[pos] = 0.0f;
+            psv[pos] = 0;
+        }
+
+        /* Walk the scan pulseg__exec_tr_start(table, si) == 1 marks the first
+         * block of a new TR; we use this to reset the within-TR position.
+         * This uses the full expanded scan table rather than the deduplicated
+         * block table, so that per-TR gradient amplitude variation (e.g. phase
+         * encoding steps) is correctly detected even after deduplication. */
+        tr_pos = 0;
+        for (si = 0; si < desc->exec_stream_len; ++si)
+        {
+            /* Reset position counter at the start of each new TR */
+            if (pulseg__exec_tr_start(desc, si))
+                tr_pos = 0;
+
+            {
+                int bt_idx = pulseg__exec_block_idx(desc, si);
+                if (tr_pos < tr_size && bt_idx >= 0 && bt_idx < desc->num_blocks)
+                {
+                    int axis;
+                    int raw_ids[3];
+                    bte = &desc->block_table[bt_idx];
+                    raw_ids[0] = bte->gx_id;
+                    raw_ids[1] = bte->gy_id;
+                    raw_ids[2] = bte->gz_id;
+
+                    for (axis = 0; axis < 3; ++axis)
+                    {
+                        raw_id = raw_ids[axis];
+                        if (raw_id >= 0 && raw_id < desc->grad_table_size)
+                        {
+                            int idx = tr_pos * 3 + axis;
+                            gte = &desc->grad_table[raw_id];
+                            if (!psv[idx])
+                            {
+                                pfa[idx] = gte->amplitude;
+                                psv[idx] = 1;
+                            }
+                            else if (gte->amplitude != pfa[idx])
+                            {
+                                desc->variable_grad_flags[tr_pos * 3 + axis] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            tr_pos++;
+            if (tr_pos >= tr_size)
+                tr_pos = 0;
+        }
+
+        if (heap)
+        {
+            PULSEG_FREE(pfa);
+            PULSEG_FREE(psv);
+        }
+    }
+
+    return PULSEG_SUCCESS;
+}
+
 int pulseg__build_seg_runs(pulseg_sequence_descriptor *desc)
 {
     int n, count, w, period, cand[2], ci;

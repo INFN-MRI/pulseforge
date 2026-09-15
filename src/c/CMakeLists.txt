@@ -12,8 +12,7 @@ set(PULSEQ_SOURCES
 )
 
 set(MD5_SOURCES     vendor/external_md5.c)
-set(KISSFFT_SOURCES vendor/external_kiss_fft.c vendor/external_kiss_fftr.c
-                    vendor/external_kiss_fft_double.c)
+set(KISSFFT_SOURCES vendor/external_kiss_fft.c vendor/external_kiss_fftr.c)
 
 # kissfft lives here rather than with pulseg because pulseq_rf.c needs it and
 # pulseg links pulseq: compiling it into both would define every kissfft symbol
@@ -29,41 +28,22 @@ target_include_directories(pulseq PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-#  pulseg -- the vendor-neutral intermediate representation, safety analysis,
-#  waveform derivation and binary cache built on top of pulseq.
+#  pulseg -- the vendor-neutral intermediate representation and the binary
+#  cache a scanner loads it from.
 # ---------------------------------------------------------------------------
 set(PULSEG_SOURCES
     core/pulseg_error.c
     core/pulseg_math.c
     core/pulseg_core.c
-    core/pulseg_parallel_posix.c
     io/pulseg_opts.c
     io/pulseg_protocol.c
     structure/pulseg_getters.c
     structure/pulseg_descriptor.c
-    waveforms/pulseg_waveforms.c
-    waveforms/pulseg_chunk.c
-    safety/pulseg_check_plan.c
-    safety/pulseg_safety.c
-    safety/pulseg_raster.c
-    safety/pulseg_pns_exact.c
-    safety/pulseg_prescription.c
-    safety/pulseg_pns_memo.c
-    safety/pulseg_pns_irnich.c
-    safety/pulseg_pns_safe.c
     cache/pulseg_cache.c
-    vendor/external_svd.c
 )
 
 add_library(pulseg STATIC ${PULSEG_SOURCES})
 target_link_libraries(pulseg PUBLIC pulseq)
-# The library's own parallel hook where POSIX threads exist; the scanner
-# target builds without the define and stays dependency-free.
-if(UNIX)
-    find_package(Threads REQUIRED)
-    target_compile_definitions(pulseg PRIVATE PULSEG_HAVE_PTHREADS)
-    target_link_libraries(pulseg PUBLIC Threads::Threads)
-endif()
 target_include_directories(pulseg PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/pulseg

@@ -2965,36 +2965,11 @@ int pulseg_get_subseq_info(const pulseg_collection *coll, pulseg_subseq_info *in
     info->num_label_columns = get_num_label_columns(coll, subseq_idx);
     info->num_gain_cal_readouts = coll->descriptors[subseq_idx].num_gain_cal_readouts;
 
-    /* The TR-instance contract of pulseg_get_tr_waveforms: every played TR
-     * is a unit. */
     {
         const pulseg_tr_descriptor *trd = &coll->descriptors[subseq_idx].tr_descriptor;
         info->num_tr_instances = trd->num_trs;
         if (info->num_tr_instances < 1)
             info->num_tr_instances = 1;
-    }
-
-    /* One canonical window per shape group: repetitions that play the same
-     * set of gradient waveforms share a worst-case envelope, and ones that
-     * play different waveforms cannot be covered by a single window.  This
-     * is the count pulseg_get_tr_gradient_waveforms indexes. */
-    {
-        int *labels = NULL;
-        int *group_first = NULL;
-        int num_groups = 0;
-        int rc;
-
-        rc = pulseg__group_tr_instances_by_shape(
-            &coll->descriptors[subseq_idx],
-            &labels,
-            &group_first,
-            &num_groups,
-            PULSEG__MAX_SHAPE_GROUPS);
-        info->num_canonical_trs = (PULSEG_SUCCEEDED(rc) && num_groups > 0) ? num_groups : 1;
-        if (labels)
-            PULSEG_FREE(labels);
-        if (group_first)
-            PULSEG_FREE(group_first);
     }
 
     return PULSEG_SUCCESS;

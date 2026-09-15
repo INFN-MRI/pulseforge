@@ -40,29 +40,10 @@ extern "C"
      * playability; they are not the rasters the file's waveforms are written
      * on.  See pulseq_raster.
      */
-    void pulseg_opts_init_full(
-        pulseg_opts *opts,
-        float gamma_hz_per_t,
-        float b0_t,
-        float max_grad_hz_per_m,
-        float max_slew_hz_per_m_per_s,
-        float rf_raster_us,
-        float grad_raster_us,
-        float adc_raster_us,
-        float block_raster_us,
-        float peak_log10_threshold,
-        float peak_norm_scale,
-        float peak_eps);
-
-    /**
-     * @brief Legacy initializer using default peak-detection parameters.
-     */
     void pulseg_opts_init(
         pulseg_opts *opts,
         float gamma_hz_per_t,
         float b0_t,
-        float max_grad_hz_per_m,
-        float max_slew_hz_per_m_per_s,
         float rf_raster_us,
         float grad_raster_us,
         float adc_raster_us,
