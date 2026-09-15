@@ -78,11 +78,11 @@ def _session_dir(daemon, client):
 def test_repeated_predownloads_generate_one_revision(daemon):
     client = daemon.client(pid=101)
     client.open("tiny", LIMITS)
-    assert client.list_protocol()["TE"].value == 8.0
-    assert client.validate({"TE": TEPreset.MINIMUM}).values["TE"] == 2.5
+    assert client.list_protocol()["TE"].value == 8000
+    assert client.validate({"TE": TEPreset.MINIMUM}).values["TE"] == 2500
     revisions = [client.generate({"TE": TEPreset.MINIMUM}) for _ in range(3)]
     assert revisions == [1, 1, 1]
-    assert client.generate({"TE": 10.0}) == 2
+    assert client.generate({"TE": 10000}) == 2
     directory = _session_dir(daemon, client)
     assert (directory / "current").readlink().as_posix() == "rev/2"
     assert sorted(p.name for p in (directory / "rev" / "1").iterdir()) == [
@@ -90,21 +90,21 @@ def test_repeated_predownloads_generate_one_revision(daemon):
         "resolved.protocol",
         "sequence.seq",
     ]
-    assert "TE: 2.5" in (directory / "rev" / "1" / "resolved.protocol").read_text()
+    assert "TE: 2500" in (directory / "rev" / "1" / "resolved.protocol").read_text()
 
 
 def test_two_sessions_interleave_without_sharing_state(daemon):
     first, second = daemon.client(pid=201), daemon.client(pid=202)
     first.open("tiny", LIMITS)
     second.open("tiny", LIMITS)
-    assert first.generate({"TE": 8.0}) == 1
-    assert second.validate({"TE": 12.0}).values["TE"] == 12.0
-    assert second.generate({"TE": 12.0}) == 1
-    assert first.generate({"TE": 8.0}) == 1
+    assert first.generate({"TE": 8000}) == 1
+    assert second.validate({"TE": 12000}).values["TE"] == 12000
+    assert second.generate({"TE": 12000}) == 1
+    assert first.generate({"TE": 8000}) == 1
     first_protocol = _session_dir(daemon, first) / "current" / "resolved.protocol"
     second_protocol = _session_dir(daemon, second) / "current" / "resolved.protocol"
-    assert "TE: 8.0" in first_protocol.read_text()
-    assert "TE: 12.0" in second_protocol.read_text()
+    assert "TE: 8000" in first_protocol.read_text()
+    assert "TE: 12000" in second_protocol.read_text()
 
 
 def test_a_crashing_plugin_fails_only_its_command(daemon):
@@ -112,25 +112,25 @@ def test_a_crashing_plugin_fails_only_its_command(daemon):
     crashing.open("crash", LIMITS)
     healthy.open("tiny", LIMITS)
     with pytest.raises(HostError, match="worker exited"):
-        crashing.validate({"TE": 8.0})
-    assert healthy.validate({"TE": 8.0}).valid
+        crashing.validate({"TE": 8000})
+    assert healthy.validate({"TE": 8000}).valid
 
 
 def test_a_restarted_daemon_serves_an_open_session(daemon):
     client = daemon.client(pid=401)
     client.open("tiny", LIMITS)
-    assert client.generate({"TE": 9.0}) == 1
+    assert client.generate({"TE": 9000}) == 1
     daemon.stop()
     daemon.start()
-    assert client.validate({"TE": 9.0}).valid
-    assert client.generate({"TE": 9.0}) == 1
+    assert client.validate({"TE": 9000}).valid
+    assert client.generate({"TE": 9000}) == 1
 
 
 def test_an_invalid_protocol_generates_nothing(daemon):
     client = daemon.client(pid=501)
     client.open("tiny", LIMITS)
     with pytest.raises(HostError, match="shorter than"):
-        client.generate({"TE": 1.0})
+        client.generate({"TE": 1000})
     assert not (_session_dir(daemon, client) / "rev").exists()
 
 

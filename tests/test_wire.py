@@ -18,34 +18,38 @@ from pulserver.protocol import (
 
 LISTING = {
     "TE": Parameter(
-        Kind.FLOAT,
-        8.0,
+        Kind.INT,
+        8000,
         InputMode.DROPDOWN,
-        1.0,
-        80.0,
-        0.1,
-        "ms",
-        (TEPreset.MINIMUM, 5.0, 8.0),
+        1000,
+        80000,
+        100,
+        "us",
+        (TEPreset.MINIMUM, 5000, 8000),
     ),
-    "TR": Parameter(Kind.FLOAT, 250.0, InputMode.TYPEIN, 5.0, 5000.0, 1.0, "ms"),
-    "matrix": Parameter(Kind.INT, 128, InputMode.DROPDOWN, 64, 512, 64, "", (128, 256)),
-    "swap_pf": Parameter(Kind.BOOL, False),
+    "TR": Parameter(Kind.INT, 250000, InputMode.TYPEIN, 5000, 5000000, 1000, "us"),
+    "fov": Parameter(Kind.FLOAT, 220.0, InputMode.TYPEIN, 50.0, 500.0, 1.0, "mm"),
+    "flip": Parameter(
+        Kind.FLOAT, 12.0, InputMode.DROPDOWN, 1.0, 90.0, 1.0, "deg", (5.0, 12.0)
+    ),
+    "swap_phase_freq": Parameter(Kind.BOOL, False),
     "sequence_type": Parameter(
         Kind.STRINGLIST, "gre", InputMode.DROPDOWN, options=("gre", "se")
     ),
-    "enable_sar_burst": Parameter(Kind.CONFIG, 1, InputMode.OFF),
-    "note": Parameter(Kind.DESCRIPTION, "Line one\nline two"),
+    "enable_sar_burst_mode": Parameter(Kind.CONFIG, 1, InputMode.OFF),
+    "user0_name": Parameter(Kind.DESCRIPTION, "Line one\nline two"),
 }
 
 # One line per kind, in the grammar pulseg_protocol_parse reads.
 LISTED_LINES = [
-    "TE: float|dropdown|8.0|1.0|80.0|0.1|ms|-2.0|5.0|8.0",
-    "TR: float|typein|250.0|5.0|5000.0|1.0|ms",
-    "matrix: int|dropdown|128|64|512|64||128|256",
-    "swap_pf: bool|false",
+    "TE: int|dropdown|8000|1000|80000|100|us|-2|5000|8000",
+    "TR: int|typein|250000|5000|5000000|1000|us",
+    "fov: float|typein|220.0|50.0|500.0|1.0|mm",
+    "flip: float|dropdown|12.0|1.0|90.0|1.0|deg|5.0|12.0",
+    "swap_phase_freq: bool|false",
     "sequence_type: stringlist|0|gre|se",
-    "enable_sar_burst: config|1",
-    "note: description|Line one\\nline two",
+    "enable_sar_burst_mode: config|1",
+    "user0_name: description|Line one\\nline two",
 ]
 
 
@@ -60,7 +64,7 @@ def test_a_listed_protocol_parses_back_to_the_same_schema():
 
 def test_a_preset_travels_as_its_negative_dropdown_value():
     block = format_values({"TE": TEPreset.MINIMUM}, LISTING)
-    assert "TE: -2.0" in block.splitlines()
+    assert "TE: -2" in block.splitlines()
     assert parse_values(block, LISTING)["TE"] == TEPreset.MINIMUM
 
 
@@ -73,30 +77,33 @@ def test_a_stringlist_value_is_read_by_option_or_by_index():
 
 
 def test_read_only_entries_travel_in_listings_but_not_in_values():
-    block = format_values({"TR": 10.0, "enable_sar_burst": 1, "note": "x"}, LISTING)
-    assert block.splitlines() == [PROTOCOL_BEGIN, "TR: 10.0", PROTOCOL_END]
-    sent = f"{PROTOCOL_BEGIN}\nTR: 10\nnote: anything\n{PROTOCOL_END}"
-    assert parse_values(sent, LISTING) == {"TR": 10.0}
+    values = {"TR": 10000, "enable_sar_burst_mode": 1, "user0_name": "x"}
+    assert format_values(values, LISTING).splitlines() == [
+        PROTOCOL_BEGIN,
+        "TR: 10000",
+        PROTOCOL_END,
+    ]
+    sent = f"{PROTOCOL_BEGIN}\nTR: 10000\nuser0_name: anything\n{PROTOCOL_END}"
+    assert parse_values(sent, LISTING) == {"TR": 10000}
 
 
 def test_a_value_for_an_undeclared_parameter_is_refused():
-    with pytest.raises(ValueError, match="flip"):
-        parse_values(f"{PROTOCOL_BEGIN}\nflip: 10\n{PROTOCOL_END}", LISTING)
+    with pytest.raises(ValueError, match="nex"):
+        parse_values(f"{PROTOCOL_BEGIN}\nnex: 2\n{PROTOCOL_END}", LISTING)
 
 
 @pytest.mark.parametrize(
     "validation",
     [
-        Validation(True, 1.5, "TA = 0:02", {"TE": 2.74, "TR": 6.34}),
-        Validation(True, None, "", {"swap_pf": True}),
-        Validation(False, None, "the requested TR is too short", {"TR": 1.0}),
+        Validation(True, 1.5, "TA = 0:02", {"TE": 2800, "TR": 6460, "fov": 180.0}),
+        Validation(True, None, "", {"swap_phase_freq": True}),
+        Validation(False, None, "the requested TR is too short", {"TR": 1000}),
     ],
     ids=["valid", "no-duration", "invalid"],
 )
 def test_a_validation_reply_round_trips(validation):
-    assert (
-        parse_validation(format_validation(validation, LISTING), LISTING) == validation
-    )
+    reply = format_validation(validation, LISTING)
+    assert parse_validation(reply, LISTING) == validation
 
 
 def test_a_dropdown_without_options_is_refused():

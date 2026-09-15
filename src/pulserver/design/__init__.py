@@ -8,6 +8,7 @@ from ._scanner import (
     IntParam,
     ScannerSequence,
     StringListParam,
+    TimeParam,
     load_plugin,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "IntParam",
     "ScannerSequence",
     "StringListParam",
+    "TimeParam",
     "load_plugin",
 ]

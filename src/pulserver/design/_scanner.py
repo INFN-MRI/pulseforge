@@ -21,16 +21,15 @@ Preset = float | Callable[[pp.Opts], float] | None
 
 # FLT_DIG: the significant decimal digits a float32 CV holds through a round trip.
 _SIGNIFICANT_DIGITS = 6
+_MICROSECOND = Decimal("1e-6")
 
 
 @dataclass(frozen=True)
 class FloatParam:
     """A float UI entry bound to an ``init_sequence`` argument.
 
-    The UI value is the argument divided by ``scale``, in ``unit``. Each key of
-    ``presets`` is a dropdown preset; its value is the argument it requests: SI
-    units, ``None`` for the application's own shortest choice, or a function of
-    the scanner limits. The entry is a dropdown when it has options or presets.
+    The UI value is the argument divided by ``scale``, in ``unit``; a dropdown
+    when it has options.
     """
 
     argument: str
@@ -40,6 +39,25 @@ class FloatParam:
     range_max: float = math.inf
     range_incr: float = 1.0
     options: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class TimeParam:
+    """A time UI entry bound to an ``init_sequence`` argument in seconds.
+
+    Values, ranges and options are integer microseconds, the unit of the
+    scanner's time CVs, so the value a CV holds is the value the design
+    reported. Each key of ``presets`` is a dropdown preset; its value is the
+    time it requests: seconds, ``None`` for the application's own shortest
+    choice, or a function of the scanner limits. The entry is a dropdown when
+    it has options or presets.
+    """
+
+    argument: str
+    range_min: int = 0
+    range_max: int = 2**31 - 1
+    range_incr: int = 1
+    options: tuple[int, ...] = ()
     presets: Mapping[int, Preset] = field(default_factory=dict)
 
 
@@ -80,7 +98,15 @@ class Description:
     text: str
 
 
-Entry = FloatParam | IntParam | BoolParam | StringListParam | ConfigParam | Description
+Entry = (
+    FloatParam
+    | TimeParam
+    | IntParam
+    | BoolParam
+    | StringListParam
+    | ConfigParam
+    | Description
+)
 
 
 def _ui_float(value: float) -> float:
@@ -95,6 +121,14 @@ def _to_si(value: float, scale: float) -> float:
     return float(Decimal(repr(_ui_float(value))) * Decimal(repr(scale)))
 
 
+def _to_microseconds(seconds: float) -> int:
+    return int((Decimal(repr(float(seconds))) / _MICROSECOND).to_integral_value())
+
+
+def _to_seconds(microseconds: int) -> float:
+    return float(Decimal(int(microseconds)) * _MICROSECOND)
+
+
 def _parameter(name: str, entry: Entry, defaults: Mapping[str, Any]) -> Parameter:
     if isinstance(entry, ConfigParam):
         return Parameter(Kind.CONFIG, entry.value, InputMode.OFF)
@@ -105,7 +139,7 @@ def _parameter(name: str, entry: Entry, defaults: Mapping[str, Any]) -> Paramete
             f"{name} binds {entry.argument!r}, which init_sequence does not take"
         )
     default = defaults[entry.argument]
-    if isinstance(entry, FloatParam):
+    if isinstance(entry, TimeParam):
         options = (*entry.presets, *entry.options)
         if default is None:
             shortest = [key for key, preset in entry.presets.items() if preset is None]
@@ -115,17 +149,29 @@ def _parameter(name: str, entry: Entry, defaults: Mapping[str, Any]) -> Paramete
                 )
             value = shortest[0]
         else:
-            value = _to_ui(default, entry.scale)
+            value = _to_microseconds(default)
         mode = InputMode.DROPDOWN if options else InputMode.TYPEIN
         return Parameter(
-            Kind.FLOAT,
+            Kind.INT,
             value,
             mode,
             entry.range_min,
             entry.range_max,
             entry.range_incr,
-            entry.unit,
+            "us",
             options,
+        )
+    if isinstance(entry, FloatParam):
+        mode = InputMode.DROPDOWN if entry.options else InputMode.TYPEIN
+        return Parameter(
+            Kind.FLOAT,
+            _to_ui(default, entry.scale),
+            mode,
+            entry.range_min,
+            entry.range_max,
+            entry.range_incr,
+            entry.unit,
+            entry.options,
         )
     if isinstance(entry, IntParam):
         mode = InputMode.DROPDOWN if entry.options else InputMode.TYPEIN
@@ -151,9 +197,10 @@ class ScannerSequence:
 
     A subclass sets :attr:`app` and :attr:`ui`, whose keys are interpreter wire
     names (``TE``, ``TR``, ``bandwidth``, ...). Entries a request omits keep the
-    application's defaults. Float UI values are read and reported to six
-    significant digits, the precision of the interpreter's float32 CVs, so a
-    reply stored in a CV and sent back resolves to itself.
+    application's defaults. Times travel as integer microseconds; other float
+    values are read and reported to six significant digits, the precision of a
+    float32 CV. Either way a reply stored in a CV and sent back resolves to
+    itself.
     """
 
     app: ClassVar[type[sequences.SequenceApp]]
@@ -243,7 +290,9 @@ class ScannerSequence:
             value = readback.get(getattr(entry, "argument", None))
             if value is None:
                 continue
-            if isinstance(entry, FloatParam):
+            if isinstance(entry, TimeParam):
+                resolved[name] = _to_microseconds(value)
+            elif isinstance(entry, FloatParam):
                 resolved[name] = _to_ui(value, entry.scale)
             elif isinstance(entry, IntParam):
                 resolved[name] = int(value)
@@ -257,14 +306,16 @@ class ScannerSequence:
             if isinstance(entry, ConfigParam | Description):
                 continue
             value = values[name]
-            if isinstance(entry, FloatParam):
+            if isinstance(entry, TimeParam):
                 if entry.presets and value < 0:
                     if value not in entry.presets:
-                        raise ValueError(f"{name} does not offer preset {value:g}")
+                        raise ValueError(f"{name} does not offer preset {value}")
                     preset = entry.presets[value]
                     value = preset(system) if callable(preset) else preset
                 else:
-                    value = _to_si(value, entry.scale)
+                    value = _to_seconds(value)
+            elif isinstance(entry, FloatParam):
+                value = _to_si(value, entry.scale)
             arguments[entry.argument] = value
         return arguments
 

@@ -2,29 +2,25 @@
 
 from pypulseqpp.sequences.sequence.gre2D_sequence import Gre2DApp
 
-from pulserver.design import FloatParam, IntParam, ScannerSequence
+from pulserver.design import FloatParam, IntParam, ScannerSequence, TimeParam
 from pulserver.protocol import TEPreset, TRPreset
 
 
 class Gre2D(ScannerSequence):
     app = Gre2DApp
     ui = {
-        "TE": FloatParam(
+        "TE": TimeParam(
             "te",
-            unit="ms",
-            scale=1e-3,
-            range_min=1.0,
-            range_max=80.0,
-            range_incr=0.01,
-            options=(5.0, 8.0),
+            range_min=1000,
+            range_max=80000,
+            range_incr=10,
+            options=(5000, 8000),
             presets={TEPreset.MINIMUM: None},
         ),
-        "TR": FloatParam(
+        "TR": TimeParam(
             "tr",
-            unit="ms",
-            scale=1e-3,
-            range_min=1.0,
-            range_max=5000.0,
+            range_min=1000,
+            range_max=5_000_000,
             presets={TRPreset.MINIMUM: None},
         ),
         "bandwidth": FloatParam(

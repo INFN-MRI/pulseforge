@@ -5,7 +5,7 @@ import pypulseqpp as pp
 import pytest
 
 from pulserver.design import load_plugin
-from pulserver.protocol import InputMode, TEPreset, TRPreset
+from pulserver.protocol import InputMode, Kind, TEPreset, TRPreset
 
 PLUGINS = Path(__file__).parent / "plugins"
 SYSTEM = pp.Opts(max_grad=40.0, grad_unit="mT/m", max_slew=150.0, slew_unit="T/m/s")
@@ -13,10 +13,10 @@ SYSTEM = pp.Opts(max_grad=40.0, grad_unit="mT/m", max_slew=150.0, slew_unit="T/m
 PRESCRIPTIONS = [
     ("tiny", {}),
     ("tiny", {"TE": TEPreset.MINIMUM}),
-    ("tiny", {"TE": 12.5, "nx": 3}),
+    ("tiny", {"TE": 12500, "nx": 3}),
     ("gre2d", {}),
     ("gre2d", {"TE": TEPreset.MINIMUM, "TR": TRPreset.MINIMUM}),
-    ("gre2d", {"TE": 5.0, "TR": 30.0, "bandwidth": 130e3}),
+    ("gre2d", {"TE": 5000, "TR": 30000, "bandwidth": 130e3}),
     ("gre2d", {"fov": 180.0, "nx": 96}),
 ]
 
@@ -31,25 +31,31 @@ def gre2d():
     return load_plugin(PLUGINS / "gre2d.py")
 
 
-def test_a_listing_shows_application_defaults_in_ui_units(tiny):
+def test_a_time_is_listed_in_integer_microseconds(tiny):
     te = tiny.listing()["TE"]
-    assert (te.value, te.unit, te.mode) == (8.0, "ms", InputMode.DROPDOWN)
+    assert (te.kind, te.value, te.unit, te.mode) == (
+        Kind.INT,
+        8000,
+        "us",
+        InputMode.DROPDOWN,
+    )
     assert te.options == (TEPreset.MINIMUM,)
 
 
 def test_a_minimum_request_resolves_to_the_designed_value(tiny, gre2d):
-    assert tiny.validate(SYSTEM, {"TE": TEPreset.MINIMUM}).values["TE"] == 2.5
+    assert tiny.validate(SYSTEM, {"TE": TEPreset.MINIMUM}).values["TE"] == 2500
     reply = gre2d.validate(SYSTEM, {"TE": TEPreset.MINIMUM})
     assert reply.valid, reply.info
-    assert 0 < reply.values["TE"] < 8.0
+    assert isinstance(reply.values["TE"], int)
+    assert 0 < reply.values["TE"] < 8000
 
 
 def test_an_infeasible_protocol_is_invalid_with_the_design_error_as_info(tiny, gre2d):
-    reply = tiny.validate(SYSTEM, {"TE": 1.0})
+    reply = tiny.validate(SYSTEM, {"TE": 1000})
     assert not reply.valid
     assert "shorter than" in reply.info
-    assert reply.values["TE"] == 1.0
-    assert "TR" in gre2d.validate(SYSTEM, {"TR": 1.0}).info
+    assert reply.values["TE"] == 1000
+    assert "TR" in gre2d.validate(SYSTEM, {"TR": 1000}).info
 
 
 def test_a_preset_the_entry_does_not_offer_is_invalid(tiny):
@@ -72,7 +78,7 @@ def test_resolving_a_resolved_protocol_changes_nothing(plugin, prescription, req
 
 
 @pytest.mark.parametrize(("plugin", "prescription"), PRESCRIPTIONS)
-def test_a_resolved_protocol_survives_float32_cv_storage(plugin, prescription, request):
+def test_a_resolved_protocol_survives_cv_storage(plugin, prescription, request):
     sequence = request.getfixturevalue(plugin)
     first = sequence.validate(SYSTEM, prescription)
     stored = {
@@ -88,7 +94,7 @@ def test_a_resolved_protocol_survives_float32_cv_storage(plugin, prescription, r
 
 def test_generate_writes_the_resolved_design(tiny, tmp_path):
     validation, paths = tiny.generate(SYSTEM, {"TE": TEPreset.MINIMUM}, tmp_path)
-    assert validation.values["TE"] == 2.5
+    assert validation.values["TE"] == 2500
     assert [Path(p).name for p in paths] == ["sequence.seq"]
     seq = pp.Sequence()
     seq.read(paths[0])
@@ -96,7 +102,7 @@ def test_generate_writes_the_resolved_design(tiny, tmp_path):
 
 
 def test_nothing_is_written_for_an_invalid_request(tiny, tmp_path):
-    validation, paths = tiny.generate(SYSTEM, {"TE": 1.0}, tmp_path)
+    validation, paths = tiny.generate(SYSTEM, {"TE": 1000}, tmp_path)
     assert not validation.valid
     assert paths == []
     assert list(tmp_path.iterdir()) == []
