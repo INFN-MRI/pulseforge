@@ -548,12 +548,16 @@ typedef struct pulseg_subseq_info
     int num_gain_cal_readouts; /**< calibration readouts for APS2 gain cal (pislquant) */
     /** TR instances the subsequence plays; always >= 1. */
     int num_tr_instances;
+    /** 1 where the RF amplitude at some position differs between TR
+     *  instances, which is what makes pulseg_get_rf_array() report a
+     *  positional-max envelope rather than one canonical instance. */
+    int rf_amplitude_variable;
 } pulseg_subseq_info;
 
 /* clang-format off */
 #define PULSEG_SUBSEQ_INFO_INIT \
     { \
-    0.0f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 \
+    0.0f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 \
     }
 /* clang-format on */
 

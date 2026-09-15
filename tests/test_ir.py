@@ -96,6 +96,36 @@ def test_an_edited_file_is_refused_when_verification_is_asked(tmp_path):
     assert convert(seq, SYSTEM, verify_signature=False).is_file()
 
 
+def _rf_train(path, flips):
+    """A pulse and a gradient per repetition, with ``flips[i]`` in repetition i."""
+    sequence = pp.Sequence(pp.Opts())
+    gradient = pp.make_trapezoid("x", flat_area=1000, flat_time=1e-3)
+    for flip in flips:
+        sequence.add_block(
+            pp.make_sinc_pulse(flip_angle=flip, duration=1e-3, use="excitation")
+        )
+        sequence.add_block(gradient)
+    sequence.write(path)
+    return path
+
+
+def test_a_subsequence_says_whether_its_rf_amplitude_varies_across_repetitions(
+    tmp_path,
+):
+    varying = _rf_train(tmp_path / "varying.seq", [0.1, 0.2, 0.3, 0.4])
+    constant = _rf_train(tmp_path / "constant.seq", [0.1] * 4)
+    assert summary(varying, SYSTEM)["subsequences"][0]["rf_amplitude_variable"] == 1
+    assert summary(constant, SYSTEM)["subsequences"][0]["rf_amplitude_variable"] == 0
+
+
+def test_the_cache_carries_the_variable_rf_amplitude_flag(tmp_path):
+    # What a reader does with the RF definitions depends on it: a variable
+    # subsequence reports a positional-max envelope rather than one instance.
+    seq = _rf_train(tmp_path / "varying.seq", [0.1, 0.2, 0.3, 0.4])
+    convert(seq, SYSTEM)
+    assert summary(seq, SYSTEM, cache_ext=".pseg") == summary(seq, SYSTEM)
+
+
 class _ChainApp(sequences.SequenceApp):
     MAX_GRAD = 40.0
     MAX_SLEW = 150.0

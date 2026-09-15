@@ -120,6 +120,7 @@ py::dict summarize(const pulseg_collection *coll)
         entry["num_unique_adcs"] = s.num_unique_adcs;
         entry["num_unique_rf"] = s.num_unique_rf;
         entry["num_tr_instances"] = s.num_tr_instances;
+        entry["rf_amplitude_variable"] = s.rf_amplitude_variable;
         entry["tr_groups"] = tr_groups(coll, i);
         subsequences.append(entry);
     }

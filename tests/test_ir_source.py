@@ -154,3 +154,13 @@ def test_every_shape_a_played_event_names_is_a_shape_the_file_holds(name):
     libraries = read(name)
     assert libraries.shapes
     shape_map(libraries, written(name))
+
+
+def test_a_pulse_the_file_does_not_label_reads_as_an_unknown_use(tmp_path):
+    sequence = pp.Sequence(pp.Opts())
+    sequence.add_block(pp.make_sinc_pulse(flip_angle=0.1, duration=1e-3))
+    path = tmp_path / "unlabelled.seq"
+    sequence.write(path)
+    loaded = pp.Sequence()
+    loaded.read(path)
+    assert int(sequence_libraries(loaded).rf_use[0]) == 0
