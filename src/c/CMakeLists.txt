@@ -1,23 +1,21 @@
 # ---------------------------------------------------------------------------
-#  pulseq -- standalone Pulseq .seq reader.
+#  pulseq -- the Pulseq waveform store the IR keeps its shapes in, and the
+#  RF spectrum both it and the conversion read.
 #  Depends on nothing else in this repository; pulseg links it, never the
 #  reverse.  Keep this target free of any pulseg include directory so the
 #  one-way dependency stays enforced by the build itself.
 # ---------------------------------------------------------------------------
 set(PULSEQ_SOURCES
-    pulseq/pulseq_parse.c
-    pulseq/pulseq_binary.c
-    pulseq/pulseq_names.c
+    pulseq/pulseq_shape.c
     pulseq/pulseq_rf.c
 )
 
-set(MD5_SOURCES     vendor/external_md5.c)
 set(KISSFFT_SOURCES vendor/external_kiss_fft.c vendor/external_kiss_fftr.c)
 
 # kissfft lives here rather than with pulseg because pulseq_rf.c needs it and
 # pulseg links pulseq: compiling it into both would define every kissfft symbol
 # twice.  pulseg keeps vendor/ on its include path for the headers.
-add_library(pulseq STATIC ${PULSEQ_SOURCES} ${MD5_SOURCES} ${KISSFFT_SOURCES})
+add_library(pulseq STATIC ${PULSEQ_SOURCES} ${KISSFFT_SOURCES})
 target_include_directories(pulseq PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/pulseq

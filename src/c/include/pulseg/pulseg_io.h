@@ -1,10 +1,10 @@
 /**
  * @file pulseg_io.h
- * @brief pulseg's view of the raw Pulseq file model, plus scan-time peek.
+ * @brief The options a conversion is given, and pulseg's view of the raw
+ *        Pulseq file model.
  *
- * The raw Pulseq reader is a standalone module (src/c/include/pulseq/) that
- * knows nothing about pulseg.  This header re-exports it for pulseg-side code
- * and adds the pulseg-level entry points that only need a parsed file.
+ * The Pulseq file model is a standalone module (src/c/include/pulseq/) that
+ * knows nothing about pulseg. This header re-exports it for pulseg-side code.
  *
  * Dependency direction is strictly one-way: pulseg includes pulseq, never the
  * reverse.
@@ -60,52 +60,6 @@ extern "C"
      * @param[in]  opts    Options carrying the system rasters.
      */
     void pulseg_opts_get_design_raster(pulseq_raster *raster, const pulseg_opts *opts);
-
-    /* ================================================================== */
-    /*  Scan-time peek (fast estimate from definitions only)              */
-    /* ================================================================== */
-
-    /**
-     * @brief Peek at scan time without full sequence loading.
-     *
-     * Reads only the [DEFINITIONS] sections from a (possibly chained)
-     * .seq file to obtain @c TotalDuration.  The result is an
-     * approximation: dead time between segments is not accounted for
-     * and @c total_segment_boundaries is left at 0.
-     *
-     * Both @c total_duration_us and @c total_segment_boundaries are populated.
-     *
-     * @param[out] info       Receives scan time summary.
-     * @param[in]  file_path  Path to the first .seq file (may be chained).
-     * @param[in]  opts       Library options.
-     * @return PULSEG_SUCCESS on success, negative error code on failure.
-     */
-    int pulseg_peek_scan_time(
-        pulseg_scan_time_info *info,
-        const char *file_path,
-        const pulseg_opts *opts);
-
-    /* ================================================================== */
-    /*  Collection-level flag peek                                        */
-    /* ================================================================== */
-
-    /**
-     * @brief Peek the collection-level flags a scan declares about itself.
-     *
-     * Reads only the [DEFINITIONS] section of @p file_path, which must be the
-     * head of the chain: these flags describe the whole scan, so the rest of
-     * a NextSequence chain is neither read nor consulted.
-     *
-     * @param[out] flags      Receives the declared flags; zeroed on entry, so
-     *                        a file that declares none leaves every default.
-     * @param[in]  file_path  Path to the head .seq file.
-     * @param[in]  opts       Library options.
-     * @return PULSEG_SUCCESS on success, negative error code on failure.
-     */
-    int pulseg_peek_sequence_flags(
-        pulseg_sequence_flags *flags,
-        const char *file_path,
-        const pulseg_opts *opts);
 
 #ifdef __cplusplus
 }

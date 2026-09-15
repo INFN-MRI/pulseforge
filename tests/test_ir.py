@@ -44,11 +44,19 @@ def _copy(name, directory):
 
 
 @pytest.mark.parametrize("name", SEQUENCES)
-def test_a_converted_cache_reads_back_as_the_parse_it_came_from(name, tmp_path):
+def test_a_converted_cache_reads_back_as_the_sequence_it_came_from(name, tmp_path):
     seq = _copy(name, tmp_path)
-    signed = seq.suffix == ".seq"
-    assert convert(seq, SYSTEM, verify_signature=signed) == cache_path(seq)
+    assert convert(seq, SYSTEM) == cache_path(seq)
     assert summary(seq, SYSTEM, cache_ext=".pseg") == summary(seq, SYSTEM)
+
+
+def test_a_binary_file_segments_into_the_scan_its_text_does(tmp_path):
+    seq = _copy("gre_2d_3sl.seq", tmp_path)
+    binary = tmp_path / "gre_2d_3sl.bin"
+    sequence = pp.Sequence()
+    sequence.read(seq)
+    sequence.write_binary(binary)
+    assert summary(binary, SYSTEM) == summary(seq, SYSTEM)
 
 
 def test_the_chain_lists_every_file_in_play_order(tmp_path):
@@ -79,10 +87,10 @@ def test_a_reader_built_for_another_vendor_refuses_the_cache(tmp_path):
         summary(seq, SYSTEM, cache_ext=".pseg")
 
 
-def test_an_unsigned_file_is_refused_when_verification_is_asked(tmp_path):
+def test_an_edited_file_is_refused_when_verification_is_asked(tmp_path):
     seq = _copy("gre_2d_3sl.seq", tmp_path)
-    text = seq.read_text()
-    seq.write_text(text[: text.index("[SIGNATURE]")])
+    # An edit the sequence survives, so what refuses it is the signature.
+    seq.write_text(seq.read_text().replace("TE 0.005", "TE 0.006", 1))
     with pytest.raises(ValueError):
         convert(seq, SYSTEM)
     assert convert(seq, SYSTEM, verify_signature=False).is_file()
@@ -155,16 +163,7 @@ def scanner_reader(tmp_path_factory):
     )
     if toolchain.returncode != 0:
         pytest.skip("no 32-bit C toolchain")
-    folders = (
-        "pulseq",
-        "core",
-        "io",
-        "structure",
-        "waveforms",
-        "safety",
-        "cache",
-        "vendor",
-    )
+    folders = ("pulseq", "core", "io", "structure", "cache", "vendor")
     sources = [
         str(p) for folder in folders for p in sorted((C_SOURCES / folder).glob("*.c"))
     ]

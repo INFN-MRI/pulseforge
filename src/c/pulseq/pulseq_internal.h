@@ -28,21 +28,6 @@ typedef struct pulseq_scale
 } pulseq_scale;
 
 /**
- * @brief Extract the reserved (well-known) keys out of an already-populated
- * generic definitions library.
- *
- * Shared by the text reader (pulseq_parse.c) and the binary reader
- * (pulseq_binary.c): both build definitions_library as name plus string
- * values, so both need the same second step to fill
- * reserved_definitions_library.
- */
-void pulseq__read_definitions(pulseq_file *seq);
-
-/* Every 1-based library id a parsed file names is in range, or
- * PULSEQ_ERR_DANGLING_ID.  Both readers run it before handing a file back. */
-int pulseq__check_references(const pulseq_file *seq);
-
-/**
  * @brief Free every library inside @p seq and return it to its initial state,
  * keeping file_path and design_raster (unlike pulseq_file_free()).
  */

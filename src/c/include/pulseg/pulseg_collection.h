@@ -4,8 +4,8 @@
  *
  * A pulseg_collection is one or more chained .seq subsequences after dedup,
  * TR detection and segmentation -- the central object every other module
- * takes as input. This header carries its lifecycle (pulseg_read /
- * pulseg_collection_free), the error/diagnostic surface, the read-only
+ * takes as input. This header carries its lifecycle, the error and
+ * diagnostic surface, the read-only
  * getters that expose its contents without revealing the internal tables,
  * and the block cursor used to walk the execution stream at scan time.
  */
@@ -20,61 +20,6 @@
 extern "C"
 {
 #endif
-
-    /* ================================================================== */
-    /*  Read / load                                                       */
-    /* ================================================================== */
-
-    /**
-     * @brief Read a (possibly chained) Pulseq sequence from disk.
-     *
-     * On success the library heap-allocates the collection and writes it
-     * to @p *out_coll.  The caller owns the collection and must free it
-     * with pulseg_collection_free().
-     *
-     * @param[out] out_coll         Receives the allocated collection.
-     * @param[out] diag             Diagnostic info on failure.
-     * @param[in]  file_path        Path to the first .seq file.
-     * @param[in]  opts             Scanner limits / rasters.
-     * @param[in]  cache_binary     1 = read/write binary cache alongside .seq (extension per pulseg_opts.cache_ext).
-     * @param[in]  verify_signature 1 = verify MD5 signature for every .seq
-     *                              file in the chain.
-     * @param[in]  parse_labels     1 = build ADC label table via dry-run.
-     * @return PULSEG_SUCCESS on success, negative error code on failure.
-     */
-    int pulseg_read(
-        pulseg_collection **out_coll,
-        pulseg_diagnostic *diag,
-        const char *file_path,
-        const pulseg_opts *opts,
-        int cache_binary,
-        int verify_signature,
-        int parse_labels);
-
-    /**
-     * @brief Read one or more Pulseq subsequences from in-memory buffers.
-     *
-     * Wrapper-friendly counterpart of pulseg_read(): the caller supplies
-     * pre-read file contents (e.g.\ from a Python bytes object) and the
-     * library parses them without touching the filesystem.  Caching and
-     * signature verification are skipped.
-     *
-     * @param[out] out_coll      Receives the allocated collection.
-     * @param[out] diag          Diagnostic info on failure.
-     * @param[in]  buffers       Array of NUL-terminated .seq contents.
-     * @param[in]  buffer_sizes  Byte length of each buffer (excl. NUL).
-     * @param[in]  num_buffers   Number of buffers (>= 1).
-     * @param[in]  opts          Scanner limits / rasters.
-     * @return PULSEG_SUCCESS on success, negative error code on failure.
-     */
-    int pulseg_read_from_buffers(
-        pulseg_collection **out_coll,
-        pulseg_diagnostic *diag,
-        const char *const *buffers,
-        const int *buffer_sizes,
-        int num_buffers,
-        const pulseg_opts *opts,
-        int parse_labels);
 
     /* ================================================================== */
     /*  Diagnostic helpers                                                */
@@ -109,8 +54,8 @@ extern "C"
     /**
      * @brief Re-run internal consistency checks on a loaded collection.
      *
-     * Already called by pulseg_read / pulseg_read_from_buffers.
-     * Exposed for unit-test or post-hoc validation workflows.
+     * Already called by pulseg_convert_collection(). Exposed for a caller
+     * validating a collection it was handed.
      *
      * @param[in]  coll  Loaded collection.
      * @param[out] diag  Diagnostic (may be NULL).
@@ -121,18 +66,15 @@ extern "C"
     /**
      * @brief Free every subsequence descriptor and the collection itself.
      *
-     * @param[in,out] coll  Collection from pulseg_read() / pulseg_read_from_buffers()
-     *                      / pulseg_collection_alloc(); NULL is a no-op.
+     * @param[in,out] coll  Collection from pulseg_collection_alloc(); NULL is
+     *                      a no-op.
      */
     void pulseg_collection_free(pulseg_collection *coll);
 
     /**
      * @brief Heap-allocate and zero-initialize an empty collection, ready to
-     * be populated by pulseg_convert_collection(). This is the same
-     * allocation pulseg_read() / pulseg_read_from_buffers() perform
-     * internally; exposed so external producers of pulseq_file that call
-     * pulseg_convert_collection() directly don't need to know
-     * pulseg_collection's (intentionally opaque) internal layout.
+     * be populated by pulseg_convert_collection(), whose caller therefore
+     * needs nothing of pulseg_collection's (intentionally opaque) layout.
      * @return A freshly allocated collection, or NULL on allocation failure.
      *         Free with pulseg_collection_free().
      */

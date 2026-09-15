@@ -6,6 +6,7 @@ import pypulseqpp as pp
 import pytest
 
 from pulserver import _ext
+from pulserver.ir._source import conversion_payload
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sequences"
 # The scanner the fixtures convert for; the period does not depend on it.
@@ -17,10 +18,12 @@ def fixtures():
 
 
 def detected(path):
-    """Blocks per repetition, as the C converter and as pypulseqpp see it."""
-    summary = _ext.summary_from_parse(str(path), *SCANNER, [0, 1, 2])
+    """Blocks per repetition, as the converter and as pypulseqpp see it."""
     sequence = pp.Sequence()
     sequence.read(path)
+    summary = _ext.summary_from_libraries(
+        [conversion_payload(sequence)], *SCANNER, [0, 1, 2]
+    )
     return (
         [part["tr_size"] for part in summary["subsequences"]],
         [sequence._native.repetition()[0]],

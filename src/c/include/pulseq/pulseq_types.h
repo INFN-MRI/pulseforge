@@ -66,7 +66,7 @@
 /*  Numeric ids for the names appearing in a LABELSET / LABELINC row  */
 /*  (column 1).  Load-bearing wire values: pulseq_get_raw_extension() */
 /*  decodes against them, and any external producer of a pulseq_file  */
-/*  must use pulseq_label_id_for_name() to obtain them.               */
+/*  must be looked up by the name the file gives them.                */
 /* ================================================================== */
 #define PULSEQ_LABEL_SLC 1
 #define PULSEQ_LABEL_SEG 2
@@ -92,8 +92,8 @@
 #define PULSEQ_LABEL_TRID 22
 #define PULSEQ_LABEL_OFF 23
 
-/* Ids above the built-in list are handed out by pulseq_label_register_name()
- * to names the file uses and Pulseq does not define.  Nothing switches on
+/* Ids above the built-in list stand for names a file uses and Pulseq does not
+ * define, handed out in the order the file names them.  Nothing switches on
  * them -- an interpreter ignores a label it does not know, which is all a
  * custom label can ever mean -- but the name survives the round trip, so a
  * writer can put back what it read. */
@@ -341,10 +341,7 @@ typedef struct pulseq_raster
  * @brief A fully-parsed Pulseq .seq file: every library section decoded
  * into flat arrays.
  *
- * Created by pulseq_read() / pulseq_read_from_buffer().  Freed by
- * pulseq_file_free().  Fields are the completed, fully-parsed raw model --
- * no half-parsed / file-handle state is ever exposed once a read returns
- * success.
+ * Filled by whatever read the file; freed by pulseq_file_free().
  */
 typedef struct pulseq_file
 {
@@ -408,17 +405,5 @@ typedef struct pulseq_file
      *  buffer must outlive every use of them. */
     int shapes_borrowed;
 } pulseq_file;
-
-/**
- * @brief A chain of pulseq files (Pulseq "next sequence" chaining).
- *
- * Created by pulseq_file_set_read().  Freed by pulseq_file_set_free().
- */
-typedef struct pulseq_file_set
-{
-    int num_sequences;
-    pulseq_file *sequences;
-    char *base_path;
-} pulseq_file_set;
 
 #endif /* PULSEQ_TYPES_H */
