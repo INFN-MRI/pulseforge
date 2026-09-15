@@ -1,15 +1,10 @@
 /**
  * @file pulseg_convert.h
- * @brief Raw pulseq files -> pulseg collection, and the derived sequence
- *        description.
+ * @brief Raw pulseq files -> pulseg collection.
  *
  * pulseg_convert_collection() is the seam between the two modules: it takes
  * pulseq_file structures the caller filled and produces the deduplicated,
  * segmented pulseg intermediate representation.
- *
- * The sequence description is the human/metadata view of a loaded
- * collection -- the event list, RF shape tuples and shim definitions that
- * the recon side and the analysis tooling consume.
  */
 
 #ifndef PULSEG_CONVERT_H
@@ -51,10 +46,6 @@ extern "C"
         int n,
         const pulseg_opts *opts,
         int parse_labels);
-
-    /* ================================================================== */
-    /*  Sequence description (SEQDESC section)                            */
-    /* ================================================================== */
 
 #ifdef __cplusplus
 }
