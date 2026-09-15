@@ -89,8 +89,7 @@ select = ["A", "ARG", "B", "C4", "D", "E", "F", "I", "NPY", "PIE", "PTH", "Q", "
 ignore = [
   "E501",   # line length is the formatter's business
   "COM812", # trailing comma conflicts with the formatter
-  "D105",   # magic methods carry their meaning in their name
-  "D107",   # __init__ is documented on the class
+  "D1",     # missing docstrings: write one only when it adds information
 ]
 
 [tool.ruff.lint.per-file-ignores]
