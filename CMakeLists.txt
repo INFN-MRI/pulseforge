@@ -20,6 +20,7 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/src/c ${CMAKE_BINARY_DIR}/c_build)
 pybind11_add_module(_ext
     ${CMAKE_SOURCE_DIR}/src/cpp/module.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/from_libraries.cpp
+    ${CMAKE_SOURCE_DIR}/src/cpp/ir/pulseq_file.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/dedup.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/structure.cpp
     ${CMAKE_SOURCE_DIR}/src/cpp/ir/collection.cpp

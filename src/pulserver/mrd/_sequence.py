@@ -25,10 +25,18 @@ _ECHO_TIE = 1e-2
 _CHUNK_SAMPLES = 1 << 22
 
 
-def read_chain(path: Path | str) -> list[tuple[Path, Any]]:
+def read_chain(path: Path | str, *, verify: bool = False) -> list[tuple[Path, Any]]:
     """Read a sequence file and every file its ``NextSequence`` definitions name, in play order.
 
     A ``NextSequence`` name is relative to the directory of the file naming it.
+
+    Parameters
+    ----------
+    path
+        The first file of the chain.
+    verify
+        Refuse a file whose contents do not match the signature it carries. A
+        file carrying none is read either way.
 
     Returns
     -------
@@ -54,7 +62,7 @@ def read_chain(path: Path | str) -> list[tuple[Path, Any]]:
             raise ValueError(f"the NextSequence chain returns to {current}")
         played.add(resolved)
         seq = pp.Sequence()
-        seq.read(current)
+        seq.read(current, verify=verify)
         chain.append((current, seq))
         following = seq.get_definition("NextSequence")
         if following in ("", None):

@@ -4,9 +4,8 @@
  *        description.
  *
  * pulseg_convert_collection() is the seam between the two modules: it takes
- * already-parsed pulseq_file structures and produces the deduplicated,
- * segmented pulseg intermediate representation. pulseg_read() composes it
- * with the pulseq reader for callers that just want a file path.
+ * pulseq_file structures the caller filled and produces the deduplicated,
+ * segmented pulseg intermediate representation.
  *
  * The sequence description is the human/metadata view of a loaded
  * collection -- the event list, RF shape tuples and shim definitions that
@@ -35,18 +34,8 @@ extern "C"
      * expansion, freq-mod flags, label table, and cross-subsequence
      * consistency checks.
      *
-     * This is the "convert" half of the former one-shot @c pulseg_read() /
-     * @c pulseg_read_from_buffers() loaders -- those now compose
-     * @c pulseq_read() (or @c _from_buffer / @c
-     * pulseq_file_set_read()) with this function. Each element of
-     * @p files must already carry its own populated @c opts (set at
-     * pulseq_file_init() / read time); there is no separate top-level
-     * opts parameter -- passing one alongside per-file opts would be
-     * ambiguous about which wins, so callers rely on the per-file copy.
-     *
-     * @param[out] coll          Caller-allocated collection to populate
-     *                           (typically freshly heap-allocated and
-     *                           zeroed, as pulseg_read() does).
+     * @param[out] coll          Caller-allocated collection to populate,
+     *                           from pulseg_collection_alloc().
      * @param[out] diag          Optional diagnostic (NULL uses a local one).
      * @param[in]  files         Array of @p n already-parsed pulseq files.
      * @param[in]  n             Number of entries in @p files (>= 1).

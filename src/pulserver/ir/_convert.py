@@ -9,6 +9,7 @@ from typing import Any
 import pypulseqpp as pp
 
 from .._accelerators import require
+from ..mrd._sequence import read_chain
 from ._source import conversion_payload
 
 
@@ -34,10 +35,12 @@ def chain(seq_path: Path | str) -> list[Path]:
 
     Raises
     ------
+    FileNotFoundError
+        If a file of the chain does not exist.
     ValueError
-        If a file of the chain cannot be read, or the chain does not end.
+        If the chain names a file it has already played.
     """
-    return [Path(p) for p in require("chain")(str(seq_path))]
+    return [path for path, _ in read_chain(seq_path)]
 
 
 def convert(
@@ -70,7 +73,8 @@ def convert(
     cache_ext
         Extension of the cache file, dot included.
     verify_signature
-        Refuse a file whose signature is missing or does not match.
+        Refuse a file whose contents do not match the signature it carries. A
+        file carrying none is read either way.
 
     Returns
     -------
@@ -80,53 +84,15 @@ def convert(
     Raises
     ------
     ValueError
-        If the file cannot be read, verified or segmented.
+        If a file of the chain cannot be read, verified or segmented.
     OSError
         If no cache was written.
     """
     seq_path = Path(seq_path)
     target = cache_path(seq_path, cache_ext)
     target.unlink(missing_ok=True)
-    require("convert")(
-        str(seq_path),
-        *_scanner(system),
-        int(vendor),
-        list(label_column_map),
-        cache_ext,
-        verify_signature,
-    )
-    if not target.is_file():
-        raise OSError(f"no cache was written for {seq_path}")
-    return target
-
-
-def convert_sequence(
-    seq_path: Path | str,
-    system: pp.Opts,
-    *,
-    vendor: int = 0,
-    label_column_map: Sequence[int] = (0, 1, 2),
-    cache_ext: str = ".pseg",
-) -> Path:
-    """Segment a sequence read through pypulseqpp and write its IR cache beside it.
-
-    As :func:`convert`, reading the ``NextSequence`` chain with
-    ``pypulseqpp.Sequence`` instead of a Pulseq parser of its own. An existing
-    cache at the destination is replaced.
-
-    Raises
-    ------
-    ValueError
-        If a file of the chain cannot be read or segmented.
-    OSError
-        If no cache was written.
-    """
-    seq_path = Path(seq_path)
-    target = cache_path(seq_path, cache_ext)
-    target.unlink(missing_ok=True)
-    payload = [conversion_payload(read_sequence(part)) for part in chain(seq_path)]
     require("convert_libraries")(
-        payload,
+        _payload(seq_path, verify_signature),
         str(seq_path),
         *_scanner(system),
         int(vendor),
@@ -154,20 +120,35 @@ def summary(
 ) -> dict[str, Any]:
     """Return the segmentation of a sequence: subsequences, segments and readouts.
 
-    With ``cache_ext``, the cache beside the file is loaded instead of the file
-    being parsed; this build loads only vendor-neutral caches, and only when the
-    size recorded in the cache matches the file.
+    With ``cache_ext``, the cache beside the file is loaded instead of the
+    chain being read and segmented again; this build loads only vendor-neutral
+    caches, and only when the size recorded in the cache matches the file.
 
     Raises
     ------
     ValueError
-        If the file cannot be parsed or the cache cannot be loaded.
+        If the file cannot be read or the cache cannot be loaded.
     """
     seq_path = Path(seq_path)
     if cache_ext is None:
-        return require("summary_from_parse")(
-            str(seq_path), *_scanner(system), list(label_column_map)
+        return require("summary_from_libraries")(
+            _payload(seq_path, verify_signature=False),
+            *_scanner(system),
+            list(label_column_map),
         )
     return require("summary_from_cache")(
         str(cache_path(seq_path, cache_ext)), seq_path.stat().st_size
     )
+
+
+def _payload(seq_path: Path, verify_signature: bool) -> list[dict[str, Any]]:
+    """Read the chain and return each file's libraries, in play order.
+
+    A file the reader refuses raises ``ValueError``, whatever the reader
+    itself raised.
+    """
+    try:
+        chain_read = read_chain(seq_path, verify=verify_signature)
+    except RuntimeError as failure:
+        raise ValueError(f"cannot read {seq_path}: {failure}") from failure
+    return [conversion_payload(sequence) for _, sequence in chain_read]

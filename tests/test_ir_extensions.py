@@ -1,30 +1,31 @@
-"""Block extensions resolved through pypulseqpp against the ones the C parser resolves."""
+"""Block extensions resolved through pypulseqpp against the file's own chains."""
 
 from pathlib import Path
 
 import numpy as np
 import pypulseqpp as pp
 import pytest
+from _seqtext import extension_chains, sections
 
-from pulserver import _ext
 from pulserver.ir._source import (
     COUNTER_LABELS,
     FLAG_LABELS,
+    LABEL_IDS,
     block_extensions,
     specification_libraries,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sequences"
-SPECIFICATIONS = ("rotation", "rf_shim", "trigger", "soft_delay")
-# Specification table against the library the C parser reads it into.
-TABLES = {
-    "rotations": "rotations",
-    "triggers": "triggers",
-    "soft_delays": "soft_delays",
-    "labelset": "labelset",
-    "labelinc": "labelinc",
+#: Specification table, as the extension the file declares it under.
+SPECIFICATIONS = {
+    "rotation": "ROTATIONS",
+    "rf_shim": "RF_SHIMS",
+    "trigger": "TRIGGERS",
+    "soft_delay": "DELAYS",
 }
-# The C parser holds its cells as float32.
+#: Soft-delay hint, as a Pulseq file numbers it; anything else is -1.
+HINT_IDS = {"TE": 1, "TR": 2, "TI": 3, "ESP": 4, "RECTIME": 5}
+# The file writes its cells at six significant digits.
 SINGLE = 1e-6
 
 
@@ -32,26 +33,56 @@ def fixtures():
     return sorted(p.name for p in FIXTURES.glob("*.seq"))
 
 
+def resolved_from_file(path):
+    """Walk every block's chain in the file and collect what it states.
+
+    An independent reading of the same chains: the block table names a head,
+    the head's links name a specification kind and a row, and a label row
+    names the label it is about.
+    """
+    found = sections(path)
+    chains, specifications = extension_chains(found.get("EXTENSIONS", []))
+    heads = [int(line.split()[7]) for line in found["BLOCKS"]]
+    count = len(heads)
+    labelset = {name: np.zeros(count, dtype=np.int32) for name in COUNTER_LABELS}
+    labelinc = {name: np.zeros(count, dtype=np.int32) for name in COUNTER_LABELS}
+    flags = {name: np.full(count, -1, dtype=np.int32) for name in FLAG_LABELS}
+    points = {name: np.full(count, -1, dtype=np.int32) for name in SPECIFICATIONS}
+
+    for index, head in enumerate(heads):
+        for kind, row in chains.get(head, []):
+            if kind in ("LABELSET", "LABELINC"):
+                value, label = specifications[kind][row]
+                if label in FLAG_LABELS:
+                    flags[label][index] = int(value)
+                else:
+                    target = labelset if kind == "LABELSET" else labelinc
+                    target[label][index] = int(value)
+            else:
+                for name, declared in SPECIFICATIONS.items():
+                    if declared == kind:
+                        points[name][index] = row - 1
+    return labelset, labelinc, flags, points
+
+
 def compare(path):
     sequence = pp.Sequence()
     sequence.read(path)
     ours = block_extensions(sequence)
-    theirs = _ext.parse_block_extensions(str(path))
+    labelset, labelinc, flags, points = resolved_from_file(path)
     for name in COUNTER_LABELS:
         np.testing.assert_array_equal(
-            ours.labelset[name], theirs["labelset"][name], err_msg=f"LABELSET {name}"
+            ours.labelset[name], labelset[name], err_msg=f"LABELSET {name}"
         )
         np.testing.assert_array_equal(
-            ours.labelinc[name], theirs["labelinc"][name], err_msg=f"LABELINC {name}"
+            ours.labelinc[name], labelinc[name], err_msg=f"LABELINC {name}"
         )
     for name in FLAG_LABELS:
         np.testing.assert_array_equal(
-            ours.flags[name], theirs["flags"][name], err_msg=f"flag {name}"
+            ours.flags[name], flags[name], err_msg=f"flag {name}"
         )
     for name in SPECIFICATIONS:
-        np.testing.assert_array_equal(
-            getattr(ours, name), theirs["indices"][name], err_msg=name
-        )
+        np.testing.assert_array_equal(getattr(ours, name), points[name], err_msg=name)
 
 
 @pytest.fixture
@@ -93,11 +124,11 @@ def extended(tmp_path):
 
 
 @pytest.mark.parametrize("name", fixtures())
-def test_every_label_a_fixture_sets_is_the_one_the_parser_resolves(name):
+def test_every_label_a_fixture_sets_is_the_one_its_chain_names(name):
     compare(FIXTURES / name)
 
 
-def test_every_specification_a_block_points_at_is_the_one_the_parser_resolves(extended):
+def test_every_specification_a_block_points_at_is_the_one_its_chain_names(extended):
     compare(extended)
 
 
@@ -112,38 +143,70 @@ def test_the_extended_sequence_plays_one_of_every_extension(extended):
     assert resolved.labelinc["LIN"].any()
 
 
+def specification_rows(path):
+    """Each specification table of the file, in the layout the libraries use.
+
+    A label row names its label and a soft delay names its hint; the libraries
+    hold the number the scanner converter files them under, so the name is
+    translated here and everything else is the file's own cells.
+    """
+    _, declared = extension_chains(sections(path).get("EXTENSIONS", []))
+    rows = {
+        name: {}
+        for name in (
+            "rotations",
+            "triggers",
+            "soft_delays",
+            "labelset",
+            "labelinc",
+            "rf_shims",
+        )
+    }
+    for kind, table in declared.items():
+        for identifier, cells in table.items():
+            if kind == "LABELSET":
+                rows["labelset"][identifier] = [cells[0], LABEL_IDS[cells[1]]]
+            elif kind == "LABELINC":
+                rows["labelinc"][identifier] = [cells[0], LABEL_IDS[cells[1]]]
+            elif kind == "DELAYS":
+                rows["soft_delays"][identifier] = [
+                    *cells[:3],
+                    HINT_IDS.get(cells[3], -1),
+                ]
+            elif kind == "ROTATIONS":
+                rows["rotations"][identifier] = list(cells)
+            elif kind == "TRIGGERS":
+                rows["triggers"][identifier] = list(cells)
+            elif kind == "RF_SHIMS":
+                # The file counts its channels first; the library holds the
+                # magnitude and phase pairs alone.
+                rows["rf_shims"][identifier] = list(cells[1:])
+    return rows
+
+
 def compare_specifications(path):
     sequence = pp.Sequence()
     sequence.read(path)
     ours = specification_libraries(sequence)
-    theirs = _ext.parse_libraries(str(path))
-    for name, library in TABLES.items():
+    theirs = specification_rows(path)
+    for name, reference in theirs.items():
         mine = getattr(ours, name)
-        reference = np.asarray(theirs[library])
         for identifier in ours.referenced[name]:
             np.testing.assert_allclose(
-                mine[identifier - 1],
-                reference[identifier - 1],
+                np.asarray(mine[identifier - 1], dtype=float),
+                np.asarray(reference[identifier], dtype=float),
                 rtol=SINGLE,
                 atol=SINGLE,
-                err_msg=f"{name} {identifier} of {path.name}",
+                err_msg=f"{name} {identifier} of {Path(path).name}",
             )
-    for identifier in ours.referenced["rf_shims"]:
-        np.testing.assert_allclose(
-            ours.rf_shims[identifier - 1],
-            np.asarray(theirs["rf_shims"][identifier - 1]),
-            rtol=SINGLE,
-            atol=SINGLE,
-            err_msg=f"shim {identifier}",
-        )
 
 
 @pytest.mark.parametrize("name", fixtures())
-def test_every_label_row_a_fixture_holds_is_the_one_the_parser_reads(name):
+def test_every_label_row_a_fixture_holds_is_the_one_the_file_lists(name):
     compare_specifications(FIXTURES / name)
 
 
-def test_every_specification_row_is_the_one_the_parser_reads(extended):
+def test_every_specification_row_is_the_one_the_file_lists(extended):
     compare_specifications(extended)
 
 
