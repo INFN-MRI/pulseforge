@@ -330,15 +330,16 @@ extern "C"
      * @brief Identify, structurally-verify, and deduplicate TRID-labeled
      * groups within a subsequence's materialized scan table.
      *
-     * For each distinct non-zero TRID found on desc->block_table[...].trid
-     * (sticky, set via pulseq LABELSET TRID), walks the scan table to find
-     * every maximal contiguous occurrence of that group, verifies every
-     * occurrence after the first is structurally identical to the first
-     * (same block definitions in the same order -- content identity, not
-     * amplitude/phase/rotation, which may legitimately vary per repeat), and
-     * returns one deduplicated pulseg_tr_group entry per TRID. Returns
-     * PULSEG_ERROR (not a partial/best-effort result) if any two occurrences
-     * of the same TRID are structurally inconsistent.
+     * An occurrence starts where the sequence SETs TRID (pulseq LABELSET
+     * TRID) and runs until the next SET, so the labels alone say where the
+     * repeating units are -- two neighbouring occurrences of one group are
+     * two occurrences even though the sticky value does not change across
+     * them. Every occurrence after the first must be structurally identical
+     * to the first (same block definitions in the same order -- content
+     * identity, not amplitude/phase/rotation, which may legitimately vary per
+     * repeat); the result holds one deduplicated pulseg_tr_group entry per
+     * TRID. Returns PULSEG_ERROR (not a partial/best-effort result) if any
+     * two occurrences of the same TRID are structurally inconsistent.
      *
      * Subsequences with no TRID labels return 0 (not an error) -- callers
      * should keep their existing whole-subsequence behavior in that case.

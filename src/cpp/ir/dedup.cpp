@@ -1949,17 +1949,22 @@ int pulseg__get_unique_blocks(
             nav_flag = (ext.flag.nav >= 0) ? ext.flag.nav : nav_flag;
             /* TRID: sticky (pulseq LABEL semantics) -- SET at a block
              * persists until the next SET, exactly like norot/nopos/pmc/nav
-             * above. 0 = ungrouped (no TRID seen yet). Lives on the
-             * per-occurrence block-table entry, never on the deduplicated
-             * block definition (int_rows/BLOCK_DEF_COLS above excludes it),
-             * so it has zero dedup footprint by construction. */
+             * above. 0 = ungrouped (no TRID seen yet). trid_set marks the
+             * block carrying the label, which is where a repetition starts:
+             * an author re-SETs the same id at every one, so the sticky value
+             * alone does not say where one ends and the next begins. Both
+             * live on the per-occurrence block-table entry, never on the
+             * deduplicated block definition (int_rows/BLOCK_DEF_COLS above
+             * excludes them), so they have zero dedup footprint. */
             trid = (ext.flag.trid >= 0) ? ext.flag.trid : trid;
+            tmp_blk_tab[n].trid_set = (ext.flag.trid >= 0) ? 1 : 0;
         }
         else
         {
             tmp_blk_tab[n].rotation_id = -1;
             tmp_blk_tab[n].digitalout_id = -1;
             tmp_blk_tab[n].rf_shim_id = -1;
+            tmp_blk_tab[n].trid_set = 0;
         }
         tmp_blk_tab[n].norot_flag = norot_flag;
         tmp_blk_tab[n].nopos_flag = nopos_flag;
