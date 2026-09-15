@@ -1,0 +1,308 @@
+"""TCP MRD server between the scanner's reconstruction client and the workers."""
+
+from __future__ import annotations
+
+__all__ = ["ReconProxy"]
+
+import contextlib
+import logging
+import re
+import shutil
+import socket
+import tempfile
+import threading
+from pathlib import Path
+from typing import Any
+
+import ismrmrd
+
+from ..recon._runtime import constants
+from ..recon._runtime.concurrency import compute_max_concurrent
+from ..recon._runtime.connection import Connection
+from ..recon._runtime.readers import deserialize_config, read_text
+from ._enrich import enrich_acquisition, enrich_header, fov_offset_m
+from ._revisions import Revision, RevisionStore
+from ._workers import WorkerPool
+
+_PLUGIN_NAME = re.compile(r"[A-Za-z0-9_\-]+")
+_log = logging.getLogger("pulserver.vre")
+
+# A worker spawns, imports its plugin and connects; past this it is not coming.
+_WORKER_TIMEOUT = 120.0
+# How often the accept loop looks at whether the proxy is closing.
+_ACCEPT_POLL = 0.5
+
+
+class ReconProxy:
+    """Routes each series of an MRD stream to a reconstruction worker.
+
+    One thread per client connection. The header's ``pulserver_session`` and
+    ``pulserver_revision`` name the design the series was played from; its
+    readout table enriches the header and every acquisition, and its
+    ``pulserver_fov_offset_mm`` demodulates them to the prescription centre.
+    The reconstruction plugin is the revision's, falling back to the name in
+    the client's config text.
+
+    A series holds a slot for as long as it runs. Its worker's images, DICOM
+    and text go back to the client as they arrive, the client's close closes
+    the worker, and the worker's close closes the client.
+
+    Parameters
+    ----------
+    base
+        Directory holding ``bucket/``, as the host daemon writes it.
+    plugins
+        Directory of reconstruction plugin files, ``<plugin>.py``.
+    slots
+        Series reconstructed at once; the memory-derived limit when ``None``.
+    spares
+        Warm worker processes waiting for a series.
+
+    Attributes
+    ----------
+    workers : WorkerPool
+        The spares assignments are taken from.
+    """
+
+    def __init__(
+        self,
+        base: Path | str,
+        plugins: Path | str,
+        *,
+        slots: int | None = None,
+        spares: int = 1,
+    ) -> None:
+        self.revisions = RevisionStore(base)
+        self.plugins = Path(plugins)
+        self.workers = WorkerPool(spares=spares)
+        self._slots = threading.BoundedSemaphore(compute_max_concurrent(override=slots))
+        self._server: socket.socket | None = None
+        self._closing = threading.Event()
+        self._threads: list[threading.Thread] = []
+
+    def bind(self, port: int = 0) -> int:
+        """Listen on ``port`` and return the port bound; 0 takes a free one."""
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("", port))
+        server.listen(16)
+        server.settimeout(_ACCEPT_POLL)
+        self._server = server
+        return int(server.getsockname()[1])
+
+    def serve(self) -> None:
+        """Accept clients until :meth:`close`, one thread each."""
+        if self._server is None:
+            self.bind()
+        _log.info("serving %s on port %d", self.revisions.bucket, self.port)
+        while not self._closing.is_set():
+            try:
+                stream, _ = self._server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            thread = threading.Thread(target=self._client, args=(stream,), daemon=True)
+            thread.start()
+            self._threads = [t for t in self._threads if t.is_alive()]
+            self._threads.append(thread)
+
+    @property
+    def port(self) -> int:
+        """Port the proxy listens on.
+
+        Raises
+        ------
+        RuntimeError
+            Before :meth:`bind`.
+        """
+        if self._server is None:
+            raise RuntimeError("the proxy is not bound")
+        return int(self._server.getsockname()[1])
+
+    def close(self) -> None:
+        """Stop accepting clients, release the spares and wait for running series."""
+        self._closing.set()
+        if self._server is not None:
+            with contextlib.suppress(OSError):
+                self._server.close()
+        for thread in self._threads:
+            thread.join(timeout=_WORKER_TIMEOUT)
+        self.workers.close()
+
+    # %% one client connection
+
+    def _client(self, stream: socket.socket) -> None:
+        connection = Connection(stream)
+        # The config names a plugin, so the proxy keeps the text the client
+        # wrote rather than the mapping a parser makes of it.
+        connection.add_reader(constants.GADGET_MESSAGE_CONFIG, read_text)
+        try:
+            config = _first(connection)
+            header = _first(connection)
+            if header is None:
+                raise ValueError("the stream carried no header")
+            self._series(connection, str(config or ""), header)
+        except Exception as error:
+            _log.exception("series failed")
+            with contextlib.suppress(Exception):
+                connection.send(f"pulserver: {error}")
+        finally:
+            connection.shutdown_close()
+
+    def _series(self, client: Connection, config: str, header: Any) -> None:
+        revision = self.revisions.resolve(header)
+        plugin = self._plugin_path(revision.recon or _config_plugin(config))
+        enrich_header(header, revision.table)
+        offset = fov_offset_m(header)
+        _log.info(
+            "series on %s: %s, %d readouts",
+            revision.directory,
+            plugin.stem,
+            len(revision.table),
+        )
+        with self._slot():
+            self._reconstruct(client, config, header, revision, plugin, offset)
+
+    @contextlib.contextmanager
+    def _slot(self) -> Any:
+        self._slots.acquire()
+        try:
+            yield
+        finally:
+            self._slots.release()
+
+    def _reconstruct(
+        self,
+        client: Connection,
+        config: str,
+        header: Any,
+        revision: Revision,
+        plugin: Path,
+        offset: Any,
+    ) -> None:
+        with _WorkerChannel(self.workers, plugin) as worker:
+            worker.send_config(config)
+            worker.send_header(header)
+            relay = threading.Thread(
+                target=_relay, args=(worker, client), daemon=True, name="relay"
+            )
+            relay.start()
+            try:
+                _forward(client, worker, revision, offset)
+            finally:
+                worker.send_close()
+                relay.join(timeout=_WORKER_TIMEOUT)
+
+    def _plugin_path(self, plugin: str) -> Path:
+        if not plugin:
+            raise ValueError(
+                "neither the revision nor the config names a reconstruction"
+            )
+        if not _PLUGIN_NAME.fullmatch(plugin):
+            raise ValueError(f"invalid plugin name {plugin!r}")
+        path = self.plugins / f"{plugin}.py"
+        if not path.is_file():
+            raise FileNotFoundError(f"no plugin {plugin!r} in {self.plugins}")
+        return path
+
+
+class _WorkerChannel:
+    """A worker's end of one series: its Unix socket, its process, its stream."""
+
+    def __init__(self, pool: WorkerPool, plugin: Path) -> None:
+        self._directory = Path(tempfile.mkdtemp(prefix="pulserver-series-"))
+        self._pool = pool
+        self._plugin = plugin
+        self.connection: Connection | None = None
+
+    def __enter__(self) -> Connection:
+        path = self._directory / "worker.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            listener.bind(str(path))
+            listener.listen(1)
+            listener.settimeout(_WORKER_TIMEOUT)
+            process = self._pool.assign(self._plugin, path)
+            try:
+                stream, _ = listener.accept()
+            except TimeoutError:
+                process.terminate()
+                raise RuntimeError(
+                    f"the worker for {self._plugin.stem} never connected"
+                ) from None
+        finally:
+            listener.close()
+        self.connection = Connection(stream)
+        return self.connection
+
+    def __exit__(self, *exception: object) -> None:
+        if self.connection is not None:
+            self.connection.shutdown_close()
+        shutil.rmtree(self._directory, ignore_errors=True)
+
+
+# %% private module subroutines
+
+
+def _first(connection: Connection) -> Any:
+    """Read the next item, or ``None`` when the stream ended first."""
+    try:
+        return connection.next()[1]
+    except StopIteration:
+        return None
+
+
+def _config_plugin(config: str) -> str:
+    """Return the plugin a config text names.
+
+    A bare name is the plugin; anything else is parsed as the runtime parses a
+    config and read from ``parameters.config``.
+    """
+    text = config.strip()
+    if _PLUGIN_NAME.fullmatch(text):
+        return text
+    parsed = deserialize_config(text, "")
+    parameters = parsed.get("parameters") if isinstance(parsed, dict) else None
+    if not isinstance(parameters, dict):
+        return ""
+    return str(parameters.get("config", ""))
+
+
+def _is_close_marker(item: Any) -> bool:
+    """Whether an acquisition is the empty end marker a CLOSE message is read as."""
+    return (
+        isinstance(item, ismrmrd.Acquisition)
+        and int(item.number_of_samples) == 0
+        and item.isFlagSet(ismrmrd.ACQ_LAST_IN_MEASUREMENT)
+    )
+
+
+def _forward(
+    client: Connection, worker: Connection, revision: Revision, offset: Any
+) -> None:
+    """Send the client's stream to the worker, acquisitions enriched in play order."""
+    index = 0
+    for item in client:
+        if _is_close_marker(item):
+            break
+        if isinstance(item, ismrmrd.Acquisition):
+            if index >= len(revision.table):
+                raise ValueError(
+                    f"the stream carries more than the {len(revision.table)} readouts "
+                    f"{revision.directory} plays"
+                )
+            enrich_acquisition(item, revision.table, index, offset)
+            index += 1
+        worker.send(item)
+
+
+def _relay(worker: Connection, client: Connection) -> None:
+    """Send everything the worker emits back to the client, until its close."""
+    try:
+        for item in worker:
+            if _is_close_marker(item):
+                break
+            client.send(item)
+    except Exception:
+        _log.exception("relaying a worker's output failed")
