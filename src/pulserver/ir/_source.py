@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-__all__ = ["SequenceLibraries", "Shape", "sequence_libraries"]
+__all__ = [
+    "BlockExtensions",
+    "SequenceLibraries",
+    "Shape",
+    "block_extensions",
+    "sequence_libraries",
+]
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -24,6 +30,33 @@ _RF_USE = {
 
 _TRAPEZOID = 0
 _ARBITRARY = 1
+
+#: Labels that count a position in the scan, in the order Pulseq numbers them.
+COUNTER_LABELS = ("SLC", "SEG", "REP", "AVG", "SET", "ECO", "PHS", "LIN", "PAR", "ACQ")
+
+#: Labels that state something about a block rather than counting one.
+FLAG_LABELS = (
+    "TRID",
+    "NAV",
+    "REV",
+    "SMS",
+    "REF",
+    "IMA",
+    "NOISE",
+    "PMC",
+    "NOROT",
+    "NOPOS",
+    "NOSCL",
+    "ONCE",
+)
+
+#: Extension specification naming each kind of row a block can point at.
+_SPECIFICATIONS = {
+    "rotation": "ROTATIONS",
+    "rf_shim": "RF_SHIMS",
+    "trigger": "TRIGGERS",
+    "soft_delay": "DELAYS",
+}
 
 
 @dataclass(frozen=True)
@@ -254,3 +287,94 @@ def _adc_library(
         modulation = np.asarray(event.phase_modulation, dtype=np.float64)
         row[7] = shapes.intern(modulation) if modulation.size else 0
     return rows
+
+
+@dataclass(frozen=True)
+class BlockExtensions:
+    """Per block, what its extension chain resolves to.
+
+    Attributes
+    ----------
+    labelset, labelinc : dict[str, NDArray[np.int32]]
+        One array per label of :data:`COUNTER_LABELS`, holding what the block
+        sets or increments it by. 0 where the block says nothing about it,
+        which is also what setting it to zero looks like.
+    flags : dict[str, NDArray[np.int32]]
+        One array per label of :data:`FLAG_LABELS`; -1 where the block states
+        none. ``TRID`` is an identifier rather than a flag and carries the
+        block's own value, not a running one.
+    rotation, rf_shim, trigger, soft_delay : NDArray[np.int32]
+        Row of that specification the block points at, counted from 0; -1 for
+        none.
+    """
+
+    labelset: dict[str, NDArray[np.int32]]
+    labelinc: dict[str, NDArray[np.int32]]
+    flags: dict[str, NDArray[np.int32]]
+    rotation: NDArray[np.int32]
+    rf_shim: NDArray[np.int32]
+    trigger: NDArray[np.int32]
+    soft_delay: NDArray[np.int32]
+
+
+def block_extensions(sequence: Any) -> BlockExtensions:
+    """Resolve every block's extension chain.
+
+    Each distinct chain is resolved once, from the first block that plays it:
+    blocks sharing a chain head resolve to the same thing.
+    """
+    core = sequence._native
+    heads = np.asarray(core.block_events(), dtype=np.int64)[:, 5]
+    resolved = {0: _Chain()}
+    for index, head in enumerate(heads):
+        if int(head) not in resolved:
+            resolved[int(head)] = _resolve(core, int(head), index + 1)
+
+    count = heads.size
+    labelset = {name: np.zeros(count, dtype=np.int32) for name in COUNTER_LABELS}
+    labelinc = {name: np.zeros(count, dtype=np.int32) for name in COUNTER_LABELS}
+    flags = {name: np.full(count, -1, dtype=np.int32) for name in FLAG_LABELS}
+    points = {name: np.full(count, -1, dtype=np.int32) for name in _SPECIFICATIONS}
+    for index, head in enumerate(heads):
+        chain = resolved[int(head)]
+        for name, value in chain.labelset.items():
+            labelset[name][index] = value
+        for name, value in chain.labelinc.items():
+            labelinc[name][index] = value
+        for name, value in chain.flags.items():
+            flags[name][index] = value
+        for name, value in chain.points.items():
+            points[name][index] = value
+    return BlockExtensions(labelset, labelinc, flags, **points)
+
+
+@dataclass
+class _Chain:
+    """One extension chain, resolved."""
+
+    labelset: dict[str, int] = field(default_factory=dict)
+    labelinc: dict[str, int] = field(default_factory=dict)
+    flags: dict[str, int] = field(default_factory=dict)
+    points: dict[str, int] = field(default_factory=dict)
+
+
+def _resolve(core: Any, head: int, block: int) -> _Chain:
+    """Resolve one chain: its labels from the block that plays it, its rows from the chain."""
+    chain = _Chain()
+    links = np.asarray(core.extension_chain(head), dtype=np.int64).reshape(2, -1)
+    kinds = {
+        name: core.extension_type_id(specification)
+        for name, specification in _SPECIFICATIONS.items()
+    }
+    for name, kind in kinds.items():
+        referenced = links[1][links[0] == kind]
+        if referenced.size:
+            # The chain names a 1-based row; the tables count from 0.
+            chain.points[name] = int(referenced[-1]) - 1
+    for label in core.decode_block(block).get("label") or ():
+        target = chain.labelset if label.setting else chain.labelinc
+        if label.label in FLAG_LABELS:
+            chain.flags[label.label] = int(label.value)
+        else:
+            target[label.label] = int(label.value)
+    return chain

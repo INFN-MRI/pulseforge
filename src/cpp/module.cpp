@@ -212,6 +212,63 @@ py::dict libraries(const pulseq_file &seq)
     return out;
 }
 
+/* Per block, what the parser resolves its extension chain to: the label
+ * counters, the flags, and the specification each kind points at. */
+py::dict block_extensions(const pulseq_file &seq)
+{
+    const int count = seq.num_blocks;
+    const char *labels[] = {"SLC", "SEG", "REP", "AVG", "SET", "ECO", "PHS", "LIN", "PAR", "ACQ"};
+    const char *flags[] = {"TRID", "NAV", "REV", "SMS", "REF", "IMA",
+                           "NOISE", "PMC", "NOROT", "NOPOS", "NOSCL", "ONCE"};
+    const char *indices[] = {"rotation", "rf_shim", "trigger", "soft_delay"};
+
+    std::vector<std::vector<int>> labelset(10, std::vector<int>(count, 0));
+    std::vector<std::vector<int>> labelinc(10, std::vector<int>(count, 0));
+    std::vector<std::vector<int>> flagged(12, std::vector<int>(count, 0));
+    std::vector<std::vector<int>> pointed(4, std::vector<int>(count, 0));
+
+    for (int i = 0; i < count; ++i)
+    {
+        pulseq_raw_block raw;
+        pulseq_raw_extension ext;
+        std::memset(&raw, 0, sizeof(raw));
+        std::memset(&ext, 0, sizeof(ext));
+        pulseq_get_raw_block_content_ids(&seq, &raw, i, 1);
+        pulseq_get_raw_extension(&seq, &ext, &raw);
+        const int *set = &ext.labelset.slc;
+        const int *inc = &ext.labelinc.slc;
+        const int *flag = &ext.flag.trid;
+        const int point[4] = {
+            ext.rotation_index, ext.rf_shim_index, ext.trigger_index, ext.soft_delay_index};
+        for (int j = 0; j < 10; ++j)
+        {
+            labelset[j][i] = set[j];
+            labelinc[j][i] = inc[j];
+        }
+        for (int j = 0; j < 12; ++j)
+            flagged[j][i] = flag[j];
+        for (int j = 0; j < 4; ++j)
+            pointed[j][i] = point[j];
+    }
+
+    py::dict out;
+    py::dict sets, incs, bits, points;
+    for (int j = 0; j < 10; ++j)
+    {
+        sets[labels[j]] = labelset[j];
+        incs[labels[j]] = labelinc[j];
+    }
+    for (int j = 0; j < 12; ++j)
+        bits[flags[j]] = flagged[j];
+    for (int j = 0; j < 4; ++j)
+        points[indices[j]] = pointed[j];
+    out["labelset"] = sets;
+    out["labelinc"] = incs;
+    out["flags"] = bits;
+    out["indices"] = points;
+    return out;
+}
+
 Collection read(const std::string &seq_path, const pulseg_opts &opts, bool write_cache, bool verify_signature)
 {
     pulseg_diagnostic diag = PULSEG_DIAGNOSTIC_INIT;
@@ -348,6 +405,34 @@ PYBIND11_MODULE(_ext, module)
             return out;
         },
         "The event, shape and definition libraries of a .seq file, as the C parser reads them.");
+
+    module.def(
+        "parse_block_extensions",
+        [](const std::string &seq_path)
+        {
+            pulseq_file seq;
+            pulseq_file_init(&seq, nullptr);
+            const int rc = pulseq_read(&seq, seq_path.c_str());
+            if (PULSEQ_FAILED(rc))
+            {
+                pulseq_file_free(&seq);
+                throw std::invalid_argument(
+                    "cannot read " + seq_path + " [error " + std::to_string(rc) + "]");
+            }
+            py::dict out;
+            try
+            {
+                out = block_extensions(seq);
+            }
+            catch (...)
+            {
+                pulseq_file_free(&seq);
+                throw;
+            }
+            pulseq_file_free(&seq);
+            return out;
+        },
+        "Per block, the label counters, flags and specifications its extension chain names.");
 
     module.def(
         "summary_from_cache",
