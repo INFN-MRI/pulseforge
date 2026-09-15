@@ -5,6 +5,7 @@ import ismrmrd.xsd
 import numpy as np
 import pypulseqpp as pp
 import pytest
+from _synthetic import add_readout
 
 from pulserver.mrd import AcquisitionFlag, EncodingSpace
 from pulserver.vre._enrich import (
@@ -16,8 +17,6 @@ from pulserver.vre._enrich import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sequences"
-SAMPLES = 32
-DELTA_K = 5.0  # 1/m: a 0.2 m field of view
 
 HEADER = """<?xml version="1.0"?>
 <ismrmrdHeader xmlns="http://www.ismrm.org/ISMRMRD">
@@ -34,21 +33,6 @@ HEADER = """<?xml version="1.0"?>
 
 def header():
     return ismrmrd.xsd.CreateFromDocument(HEADER)
-
-
-def add_readout(seq, *labels, rotation=None):
-    system = pp.Opts()
-    gx = pp.make_trapezoid(
-        "x", flat_area=SAMPLES * DELTA_K, flat_time=3.2e-3, system=system
-    )
-    adc = pp.make_adc(
-        num_samples=SAMPLES, duration=3.2e-3, delay=gx.rise_time, system=system
-    )
-    rewinder = pp.make_trapezoid("x", area=-gx.area / 2, duration=1e-3, system=system)
-    extra = () if rotation is None else (rotation,)
-    seq.add_block(rewinder, *extra)
-    seq.add_block(gx, adc, *labels, *extra)
-    seq.add_block(rewinder, *extra)
 
 
 def written(seq, tmp_path):
@@ -149,20 +133,26 @@ def test_navigator_readouts_form_their_own_encoding_space(tmp_path):
     ]
 
 
-def test_a_cartesian_line_carries_no_trajectory():
-    table = fixture("gre_2d_3sl.seq")
-    assert not table.spaces[0].trajectory
-    acquisition = acquisitions(table)[0]
-    enrich_acquisition(acquisition, table, 0)
-    assert acquisition.trajectory_dimensions == 0
+@pytest.mark.parametrize("name", ["gre_2d_3sl.seq", "epi_2d_main.seq"])
+def test_a_line_of_k_carries_one_axis_under_a_cartesian_header(name):
+    table = fixture(name)
+    k_adc = reference(name).calculate_kspace()[0]
+    for index, acquisition in enumerate(acquisitions(table)):
+        enrich_acquisition(acquisition, table, index)
+        assert acquisition.trajectory_dimensions == 1
+        np.testing.assert_allclose(
+            acquisition.traj[:, 0],
+            readout_k(k_adc, table, index)[0],
+            rtol=1e-5,
+            atol=1e-3,
+        )
+        assert acquisition.center_sample == table.center_sample[index]
     enriched = header()
     enrich_header(enriched, table)
     assert enriched.encoding[0].trajectory == ismrmrd.xsd.trajectoryType.CARTESIAN
 
 
-@pytest.mark.parametrize(
-    "name", ["zte_3d.seq", "mprage_stack_of_spirals_3d.seq", "epi_2d_main.seq"]
-)
+@pytest.mark.parametrize("name", ["zte_3d.seq", "mprage_stack_of_spirals_3d.seq"])
 def test_a_non_cartesian_readout_carries_its_absolute_k(name):
     table = fixture(name)
     k_adc = reference(name).calculate_kspace()[0]
@@ -171,53 +161,31 @@ def test_a_non_cartesian_readout_carries_its_absolute_k(name):
         enrich_acquisition(acquisition, table, index)
         k = readout_k(k_adc, table, index)
         dimensions = acquisition.trajectory_dimensions
-        assert dimensions >= 1
+        assert dimensions >= 2
         np.testing.assert_allclose(
             acquisition.traj, k[:dimensions].T, rtol=1e-5, atol=1e-3
         )
-        assert np.abs(k[dimensions:]).max(initial=0.0) <= 1e-6 * np.abs(k).max()
+    enriched = header()
+    enrich_header(enriched, table)
+    assert enriched.encoding[0].trajectory == ismrmrd.xsd.trajectoryType.OTHER
 
 
-def test_a_rotated_flat_readout_still_carries_a_trajectory(tmp_path):
+def test_a_rotated_flat_readout_makes_its_space_non_cartesian(tmp_path):
     seq = pp.Sequence(pp.Opts())
     for angle in (0.0, np.pi / 2):
         add_readout(seq, rotation=pp.make_rotation(angle))
     assert written(seq, tmp_path).spaces[0].trajectory
 
 
-def test_one_rotation_shared_by_every_readout_is_not_an_encoding(tmp_path):
+def test_a_readout_whose_k_does_not_move_keeps_the_received_centre_sample(tmp_path):
     seq = pp.Sequence(pp.Opts())
-    rotation = pp.make_rotation(np.pi / 2)
-    for _ in range(2):
-        add_readout(seq, rotation=rotation)
-    assert not written(seq, tmp_path).spaces[0].trajectory
-
-
-def test_a_rotated_readout_keeps_the_echo_index_of_its_unrotated_copy(tmp_path):
-    seq = pp.Sequence(pp.Opts())
-    for angle in (0.0, np.pi / 2):
-        add_readout(seq, rotation=pp.make_rotation(angle))
-    assert written(seq, tmp_path).center_sample.tolist() == [SAMPLES // 2] * 2
-
-
-def test_the_echo_index_is_the_design_centre_sample():
-    table = fixture("gre_2d_3sl.seq")
-    design = int(
-        np.atleast_1d(reference("gre_2d_3sl.seq").get_definition("kSpaceCenterSample"))[
-            0
-        ]
-    )
-    assert set(table.center_sample.tolist()) == {design}
-
-
-def test_reversed_lines_meet_the_echo_at_the_mirrored_sample():
-    table = fixture("epi_2d_main.seq")
-    reverse = has(table, AcquisitionFlag.IS_REVERSE)
-    assert reverse.any() and (~reverse).any()
-    forward_centre = set(table.center_sample[~reverse].tolist())
-    reverse_centre = set(table.center_sample[reverse].tolist())
-    assert len(forward_centre) == len(reverse_centre) == 1
-    assert forward_centre.pop() + reverse_centre.pop() == int(table.num_samples[0]) - 1
+    add_readout(seq, moving=False)
+    table = written(seq, tmp_path)
+    acquisition = acquisitions(table)[0]
+    acquisition.center_sample = 7
+    enrich_acquisition(acquisition, table, 0)
+    assert acquisition.center_sample == 7
+    assert acquisition.trajectory_dimensions == 0
 
 
 @pytest.mark.parametrize("name", ["gre_2d_3sl.seq", "zte_3d.seq"])

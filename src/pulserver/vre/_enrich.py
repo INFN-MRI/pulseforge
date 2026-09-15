@@ -1,7 +1,8 @@
 """Enrichment of an MRD stream from the sequence that produced it.
 
-The sequence chain is tabulated once, one row per readout in play order, and
-acquisitions are matched to rows in stream order.
+The chain's :class:`~pulserver.mrd.ReadoutTable` rows are mapped onto MRD
+counters, flags and encoding spaces, and acquisitions are matched to rows in
+stream order.
 """
 
 from __future__ import annotations
@@ -21,12 +22,11 @@ from typing import Any
 
 import ismrmrd.xsd as xsd
 import numpy as np
-import pypulseqpp as pp
 
 from .._labels import MRD_COUNTERS, MRD_FLAGS
-from ..ir import chain
 from ..mrd._acquisitions import AcquisitionFlag
 from ..mrd._metadata import user_parameter
+from ..mrd._sequence import ReadoutTable, SequenceDefinitions, read_chain
 
 #: Header user parameter holding the prescription centre: a string of three
 #: numbers in mm, along the sequence's x, y and z gradient axes.
@@ -65,24 +65,6 @@ _LIMIT_FIELDS = {
 #: Counters every encoding space states limits for, written or not.
 _STANDARD_LIMITS = ("LIN", "PAR", "AVG", "SLC", "ECO", "PHS", "REP", "SET", "SEG")
 
-#: Samples per chunk when readouts are processed in bulk.
-_CHUNK_SAMPLES = 1 << 22
-
-#: Range of an axis, relative to the widest, below which a readout does not
-#: sweep it; rotation rounding alone stays below it.
-_SWEEP_FLOOR = 1e-9
-
-#: Echo-index tie tolerance, in mean sample steps along the swept axes.
-_ECHO_TIE = 1e-2
-
-#: Largest deviation from a straight line, in mean sample steps, of a readout
-#: still read as a line.
-_LINE_TOLERANCE = 1e-3
-
-#: Magnitude, relative to the readout's largest, below which a trailing
-#: trajectory axis is dropped.
-_AXIS_FLOOR = 1e-6
-
 
 @dataclass(frozen=True)
 class TableSpace:
@@ -101,9 +83,8 @@ class TableSpace:
         ``(x, y, z)`` from ``FOV``, or ``NavFOV`` for a navigator, in mm;
         ``None`` when undefined.
     trajectory
-        Whether acquisitions of the space carry a trajectory: some readout is
-        not a straight line in k, or the block rotations of its readouts
-        differ.
+        Whether some readout of the space keeps more than one k axis, which
+        makes the space non-Cartesian.
     """
 
     subsequence: int
@@ -115,7 +96,7 @@ class TableSpace:
 
 @dataclass(frozen=True)
 class SequenceTable:
-    """Per-readout description of a sequence chain, in play order.
+    """The readouts of a sequence chain as MRD describes them, in play order.
 
     Attributes
     ----------
@@ -128,22 +109,17 @@ class SequenceTable:
         ``LAST_IN_MEASUREMENT`` on the final readout of the chain. A boundary
         is read within its encoding space and the other image-selecting
         counters, so a slice closes once per echo.
-    center_sample : ndarray
-        ``int32`` echo index in the readout as acquired, -1 where k does not
-        move. The sample nearest the subsequence's closest approach to k = 0,
-        measured along the axes the readout sweeps in the sequence frame; a
-        tie within 1% of a sample step goes to increasing k along the
-        direction of travel, so reversed lines mirror onto forward ones.
+    center_sample, trajectory_dimensions, num_samples : ndarray
+        As :class:`~pulserver.mrd.ReadoutTable` states them, over the chain.
     sample_time_us : ndarray
         ``float32`` dwell, in µs.
     encoding_space : ndarray
         ``int32`` index into :attr:`spaces`.
-    num_samples, sample_offset : ndarray
-        Samples of each readout and the column of its first sample in
-        :attr:`k`.
+    sample_offset : ndarray
+        ``int64`` column of each readout's first sample in :attr:`k`.
     k : ndarray
-        ``float32``, ``(3, samples)``: absolute k-space position of every
-        sample, in 1/m, with block rotations applied.
+        ``float32``, ``(3, samples)``: absolute k of every sample, in 1/m,
+        with block rotations applied.
     spaces : tuple of TableSpace
         Numbered in chain order: each subsequence's primary space, then its
         navigator space when it has ``NAV`` readouts.
@@ -156,6 +132,7 @@ class SequenceTable:
     counters: dict[str, np.ndarray]
     flags: np.ndarray
     center_sample: np.ndarray
+    trajectory_dimensions: np.ndarray
     sample_time_us: np.ndarray
     encoding_space: np.ndarray
     num_samples: np.ndarray
@@ -173,30 +150,32 @@ class SequenceTable:
 
         Raises
         ------
+        FileNotFoundError
+            If a file of the chain does not exist.
         ValueError
-            If a file of the chain cannot be read, or the chain does not end.
+            If the chain names a file it has already played.
         """
         parts: list[dict[str, Any]] = []
         spaces: list[TableSpace] = []
-        definitions: dict[str, list[float]] = {
-            "TR": [],
-            "TE": [],
-            "TI": [],
-            "FlipAngle": [],
-        }
-        for subsequence, file in enumerate(chain(path)):
-            seq = pp.Sequence()
-            seq.read(file)
-            part, part_spaces = _tabulate(seq, subsequence, len(spaces))
+        tr: list[float] = []
+        te: list[float] = []
+        ti: list[float] = []
+        flip: list[float] = []
+        offset = 0
+        for subsequence, (_, seq) in enumerate(read_chain(path)):
+            readouts = ReadoutTable.from_sequence(seq)
+            definitions = SequenceDefinitions.from_sequence(seq)
+            part, part_spaces = _map_readouts(
+                readouts, definitions, subsequence, len(spaces)
+            )
+            part["sample_offset"] = part["sample_offset"] + offset
+            offset += int(readouts.num_samples.sum())
             parts.append(part)
             spaces.extend(part_spaces)
-            for key, values in definitions.items():
-                values.extend(_numbers(seq.get_definition(key)))
-
-        offset = 0
-        for part in parts:
-            part["sample_offset"] = part["sample_offset"] + offset
-            offset += int(part["num_samples"].sum())
+            tr.extend(definitions.tr)
+            te.extend(definitions.te)
+            ti.extend(definitions.ti)
+            flip.extend(definitions.flip_angle)
 
         def joined(name: str, dtype: Any) -> np.ndarray:
             return np.concatenate([part[name] for part in parts]).astype(dtype)
@@ -206,14 +185,14 @@ class SequenceTable:
             flags[-1] |= np.uint64(_F.LAST_IN_MEASUREMENT.value)
 
         parameters: dict[str, list[float]] = {}
-        if definitions["TR"]:
-            parameters["TR"] = [1e3 * min(definitions["TR"])]
-        if definitions["TE"]:
-            parameters["TE"] = [1e3 * value for value in sorted(set(definitions["TE"]))]
-        if definitions["TI"]:
-            parameters["TI"] = [1e3 * min(definitions["TI"])]
-        if definitions["FlipAngle"]:
-            parameters["FlipAngle"] = [max(definitions["FlipAngle"])]
+        if tr:
+            parameters["TR"] = [1e3 * min(tr)]
+        if te:
+            parameters["TE"] = [1e3 * value for value in sorted(set(te))]
+        if ti:
+            parameters["TI"] = [1e3 * min(ti)]
+        if flip:
+            parameters["FlipAngle"] = [max(flip)]
 
         return cls(
             counters={
@@ -224,6 +203,7 @@ class SequenceTable:
             },
             flags=flags,
             center_sample=joined("center_sample", np.int32),
+            trajectory_dimensions=joined("trajectory_dimensions", np.int8),
             sample_time_us=joined("sample_time_us", np.float32),
             encoding_space=joined("encoding_space", np.int32),
             num_samples=joined("num_samples", np.int32),
@@ -332,8 +312,8 @@ def enrich_acquisition(
 
     Sets the encoding counters, flags, ``sample_time_us`` and
     ``encoding_space_ref``, and ``center_sample`` unless k does not move
-    across the readout. Acquisitions of a trajectory space get the readout's
-    absolute k as ``traj``, trailing axes with no k dropped. With
+    across the readout, in which case the received value stays. A readout
+    whose k moves gets it as ``traj``, trailing constant axes dropped. With
     ``fov_offset``, every channel is multiplied by ``exp(+i 2 pi d . k)``,
     which moves an object at ``d`` to the centre of the field of view; the
     trajectory is not changed.
@@ -367,8 +347,7 @@ def enrich_acquisition(
     if table.center_sample[index] >= 0:
         acquisition.center_sample = int(table.center_sample[index])
     acquisition.sample_time_us = float(table.sample_time_us[index])
-    space = int(table.encoding_space[index])
-    acquisition.encoding_space_ref = space
+    acquisition.encoding_space_ref = int(table.encoding_space[index])
 
     start = int(table.sample_offset[index])
     k = table.k[:, start : start + count]
@@ -378,129 +357,68 @@ def enrich_acquisition(
         cycles = np.asarray(fov_offset, dtype=np.float64) @ k.astype(np.float64)
         data = data * np.exp(2j * np.pi * cycles).astype(np.complex64)
 
-    if table.spaces[space].trajectory:
-        dimensions = _dimensions(k)
-        channels = int(acquisition.active_channels)
-        acquisition.resize(count, channels, dimensions)
-        if dimensions:
-            acquisition.traj[:] = k[:dimensions].T
+    dimensions = int(table.trajectory_dimensions[index])
+    if dimensions:
+        acquisition.resize(count, int(acquisition.active_channels), dimensions)
+        acquisition.traj[:] = k[:dimensions].T
     acquisition.data[:] = data
 
 
 # %% private module subroutines
 
 
-def _tabulate(
-    seq: Any, subsequence: int, first_space: int
+def _map_readouts(
+    readouts: ReadoutTable,
+    definitions: SequenceDefinitions,
+    subsequence: int,
+    first_space: int,
 ) -> tuple[dict[str, Any], list[TableSpace]]:
     """Rows and encoding spaces of one subsequence, spaces numbered from ``first_space``."""
-    adc = seq.waveforms_and_times(compat=False).adc
-    count = int(np.size(adc.block))
-    num_samples = np.asarray(adc.num_samples, dtype=np.int64).reshape(count)
-    sample_offset = np.zeros(count, dtype=np.int64)
-    if count:
-        sample_offset[1:] = np.cumsum(num_samples)[:-1]
-        k = np.asarray(seq.calculate_kspace()[0], dtype=np.float64)
-    else:
-        k = np.zeros((3, 0))
-
-    labels = seq.evaluate_labels(evolution="adc") if count else {}
-    values = {name: _per_readout(value, count) for name, value in labels.items()}
+    count = len(readouts)
+    labels = readouts.labels
     counters = {
-        name: values.get(name, np.zeros(count, dtype=np.int64)) for name in MRD_COUNTERS
+        name: labels.get(name, np.zeros(count, dtype=np.int64)) for name in MRD_COUNTERS
     }
 
     flags = np.zeros(count, dtype=np.uint64)
     for name, bit in _SEQUENCE_FLAGS.items():
-        if name in values:
-            flags[values[name] != 0] |= np.uint64(bit)
+        if name in labels:
+            flags[labels[name] != 0] |= np.uint64(bit)
     navigator = (flags & np.uint64(_F.IS_NAVIGATION_DATA.value)) != 0
     local_space = navigator.astype(np.int64)
-    flags |= _boundary_flags(counters, local_space, set(values))
-
-    blocks = np.asarray(adc.block, dtype=np.int64).reshape(count)
-    events = seq.block_events
-    adc_ids = np.fromiter(
-        (events[int(b)][5] for b in blocks), dtype=np.int64, count=count
-    )
-    ext_ids = np.fromiter(
-        (events[int(b)][6] for b in blocks), dtype=np.int64, count=count
-    )
-    dwell = _per_event(
-        adc_ids, blocks, lambda block: float(seq.get_block(block).adc.dwell)
-    )
-    quaternions = _per_event(
-        ext_ids, blocks, lambda block: _quaternion(seq.get_block(block))
-    )
-    rotations = np.array([_rotation_matrix(q) for q in quaternions]).reshape(
-        count, 3, 3
-    )
-
-    center_sample, line = _echo_indices_and_lines(
-        k, sample_offset, num_samples, rotations
-    )
+    flags |= _boundary_flags(counters, local_space, set(labels))
 
     spaces = []
     for local, is_navigator in ((0, False), (1, True)):
         if is_navigator and not navigator.any():
             break
-        members = local_space == local
-        rotated = np.unique(np.round(quaternions[members], 9), axis=0).shape[0] > 1
-        prefix = "Nav" if is_navigator else ""
+        fov = definitions.navigator_fov if is_navigator else definitions.fov
         spaces.append(
             TableSpace(
                 subsequence=subsequence,
                 navigator=is_navigator,
-                matrix=_triple(seq.get_definition(prefix + "Matrix"), int, 1.0),
-                fov_mm=_triple(seq.get_definition(prefix + "FOV"), float, 1e3),
-                trajectory=bool(rotated or not line[members].all()),
+                matrix=definitions.navigator_matrix
+                if is_navigator
+                else definitions.matrix,
+                fov_mm=None if fov is None else tuple(round(1e3 * v, 9) for v in fov),
+                trajectory=bool(
+                    (readouts.trajectory_dimensions[local_space == local] > 1).any()
+                ),
             )
         )
 
     part = {
         "counters": counters,
         "flags": flags,
-        "center_sample": center_sample,
-        "sample_time_us": 1e6 * dwell,
+        "center_sample": readouts.center_sample,
+        "trajectory_dimensions": readouts.trajectory_dimensions,
+        "sample_time_us": 1e6 * readouts.dwell,
         "encoding_space": first_space + local_space,
-        "num_samples": num_samples,
-        "sample_offset": sample_offset,
-        "k": k,
+        "num_samples": readouts.num_samples,
+        "sample_offset": readouts.sample_offset,
+        "k": readouts.k,
     }
     return part, spaces
-
-
-def _per_readout(value: Any, count: int) -> np.ndarray:
-    """Return a label record as one value per readout; ``evaluate_labels`` gives a scalar for one readout."""
-    return np.broadcast_to(np.asarray(value, dtype=np.int64), (count,)).copy()
-
-
-def _per_event(ids: np.ndarray, blocks: np.ndarray, value_of: Any) -> np.ndarray:
-    """Evaluate ``value_of(block)`` once per distinct event id and spread it over the readouts."""
-    if not ids.size:
-        return np.zeros(0)
-    _, first, inverse = np.unique(ids, return_index=True, return_inverse=True)
-    values = np.array([value_of(int(blocks[at])) for at in first])
-    return values[inverse.reshape(-1)]
-
-
-def _quaternion(block: Any) -> np.ndarray:
-    rotation = block.rotation
-    if rotation is None:
-        return np.array([1.0, 0.0, 0.0, 0.0])
-    return np.asarray(rotation.quaternion, dtype=np.float64)
-
-
-def _rotation_matrix(q: np.ndarray) -> np.ndarray:
-    """Row-major rotation matrix of a scalar-first unit quaternion."""
-    w, x, y, z = q
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-        ]
-    )
 
 
 def _boundary_flags(
@@ -527,149 +445,6 @@ def _boundary_flags(
         flags[first_at] |= np.uint64(first.value)
         flags[count - 1 - last_from_end] |= np.uint64(last.value)
     return flags
-
-
-def _chunks(num_samples: np.ndarray) -> list[tuple[np.ndarray, int]]:
-    """Readout indices grouped by sample count, split to at most ``_CHUNK_SAMPLES`` samples."""
-    out = []
-    for n in np.unique(num_samples):
-        rows = np.flatnonzero(num_samples == n)
-        size = max(1, _CHUNK_SAMPLES // max(int(n), 1))
-        out.extend((rows[at : at + size], int(n)) for at in range(0, rows.size, size))
-    return out
-
-
-def _nearest_along_travel(
-    distance: np.ndarray, tolerance: np.ndarray, forward: np.ndarray
-) -> np.ndarray:
-    """Per row, the index of the smallest distance, ties toward increasing k along the direction of travel.
-
-    A sample within ``tolerance`` of the running minimum ties with it; a tie
-    takes the later sample on a forward readout and keeps the earlier one on a
-    reverse readout.
-    """
-    before = np.minimum.accumulate(distance, axis=1)
-    before = np.concatenate(
-        [np.full((distance.shape[0], 1), np.inf), before[:, :-1]], axis=1
-    )
-    margin = tolerance[:, None]
-    takes = np.where(
-        forward[:, None], distance <= before + margin, distance < before - margin
-    )
-    return distance.shape[1] - 1 - np.argmax(takes[:, ::-1], axis=1)
-
-
-def _echo_indices_and_lines(
-    k: np.ndarray,
-    sample_offset: np.ndarray,
-    num_samples: np.ndarray,
-    rotations: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Echo index of every readout, and whether each is a straight line in k.
-
-    Works in the sequence frame, undoing each block's rotation, so rotated
-    copies of one readout share an echo index.
-    """
-    count = sample_offset.size
-    swept = np.zeros((count, 3), dtype=bool)
-    tolerance = np.zeros(count)
-    forward = np.ones(count, dtype=bool)
-    nearest = np.zeros(count)
-    nearest_at = np.zeros(count, dtype=np.int64)
-    static_sq = np.zeros(count)
-    line = np.ones(count, dtype=bool)
-    chunks = [(rows, n) for rows, n in _chunks(num_samples) if n > 0]
-
-    def sequence_frame(rows: np.ndarray, n: int) -> np.ndarray:
-        rotated = k[:, sample_offset[rows, None] + np.arange(n)].transpose(1, 0, 2)
-        return np.einsum("rji,rjn->rin", rotations[rows], rotated)
-
-    for rows, n in chunks:
-        kk = sequence_frame(rows, n)
-        span = kk.max(axis=2) - kk.min(axis=2)
-        mask = span > _SWEEP_FLOOR * span.max(axis=1, keepdims=True)
-        swept[rows] = mask
-        on_swept = kk * mask[:, :, None]
-        step = (
-            np.sqrt((np.diff(on_swept, axis=2) ** 2).sum(axis=1)).mean(axis=1)
-            if n > 1
-            else np.zeros(rows.size)
-        )
-        tolerance[rows] = _ECHO_TIE * step
-        travel = (kk[:, :, -1] - kk[:, :, 0]) * mask
-        dominant = np.abs(travel).argmax(axis=1)
-        forward[rows] = travel[np.arange(rows.size), dominant] >= 0
-        distance = np.sqrt((on_swept**2).sum(axis=1))
-        nearest[rows] = distance.min(axis=1)
-        nearest_at[rows] = _nearest_along_travel(
-            distance, tolerance[rows], forward[rows]
-        )
-        static_sq[rows] = ((kk[:, :, 0] * ~mask) ** 2).sum(axis=1)
-        if n > 2:
-            t = np.arange(n) - (n - 1) / 2
-            slope = (kk * t).sum(axis=2) / (t**2).sum()
-            fit = kk.mean(axis=2, keepdims=True) + slope[:, :, None] * t
-            deviation = np.abs(kk - fit).max(axis=(1, 2))
-            line[rows] = (deviation <= _LINE_TOLERANCE * step) | ~mask.any(axis=1)
-
-    # The subsequence's closest approach to k = 0; ties between readouts
-    # prefer a forward one, whose indices need no mirroring.
-    best = -1
-    best_total = 0.0
-    for i in np.flatnonzero(num_samples > 0):
-        total = float(np.sqrt(nearest[i] ** 2 + static_sq[i]))
-        if best < 0:
-            best, best_total = int(i), total
-            continue
-        margin = max(tolerance[i], tolerance[best])
-        if total < best_total - margin:
-            best, best_total = int(i), total
-        elif total <= best_total + margin:
-            best_total = min(best_total, total)
-            if forward[i] and not forward[best]:
-                best = int(i)
-
-    center = np.full(count, -1, dtype=np.int32)
-    if best < 0:
-        return center, line
-    centre_k = sequence_frame(np.array([best]), int(num_samples[best]))[0][
-        :, nearest_at[best]
-    ]
-
-    for rows, n in chunks:
-        kk = sequence_frame(rows, n)
-        mask = swept[rows]
-        distance = np.sqrt(
-            (((kk - centre_k[None, :, None]) * mask[:, :, None]) ** 2).sum(axis=1)
-        )
-        at = _nearest_along_travel(distance, tolerance[rows], forward[rows])
-        center[rows] = np.where(mask.any(axis=1), at, -1)
-    return center, line
-
-
-def _dimensions(k: np.ndarray) -> int:
-    """Trajectory axes of one readout, trailing axes with no k dropped."""
-    largest = float(np.abs(k).max()) if k.size else 0.0
-    dimensions = 3
-    while (
-        dimensions
-        and float(np.abs(k[dimensions - 1]).max(initial=0.0)) <= _AXIS_FLOOR * largest
-    ):
-        dimensions -= 1
-    return dimensions
-
-
-def _numbers(value: Any) -> list[float]:
-    if value in ("", None):
-        return []
-    return [float(v) for v in np.atleast_1d(value)]
-
-
-def _triple(value: Any, kind: type, scale: float) -> tuple | None:
-    numbers = _numbers(value)
-    if len(numbers) < 3:
-        return None
-    return tuple(kind(round(scale * v, 9)) for v in numbers[:3])
 
 
 def _limit(values: np.ndarray) -> Any:

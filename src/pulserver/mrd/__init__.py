@@ -11,6 +11,7 @@ from ._metadata import (
     max_stored_value,
     user_parameter,
 )
+from ._sequence import ReadoutTable, SequenceDefinitions, read_chain
 
 __all__ = [
     "LOOP_COUNTERS",
@@ -19,6 +20,8 @@ __all__ = [
     "AcquisitionFlag",
     "EncodingSpace",
     "MrdMetadata",
+    "ReadoutTable",
+    "SequenceDefinitions",
     "acquisition_label",
     "acquisition_labels",
     "as_numpy",
@@ -26,5 +29,6 @@ __all__ = [
     "coil_combine",
     "has_acquisition_flag",
     "max_stored_value",
+    "read_chain",
     "user_parameter",
 ]
