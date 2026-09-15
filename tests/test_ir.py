@@ -163,20 +163,13 @@ def scanner_reader(tmp_path_factory):
     )
     if toolchain.returncode != 0:
         pytest.skip("no 32-bit C toolchain")
-    folders = ("pulseq", "core", "io", "structure", "cache", "vendor")
+    folders = ("pulseq", "core", "io", "structure", "cache")
     sources = [
         str(p) for folder in folders for p in sorted((C_SOURCES / folder).glob("*.c"))
     ]
     includes = [
         f"-I{C_SOURCES / sub}"
-        for sub in (
-            "",
-            "include",
-            "include/pulseg",
-            "include/pulseq",
-            "pulseq",
-            "vendor",
-        )
+        for sub in ("", "include", "include/pulseg", "include/pulseq", "pulseq")
     ]
     output = directory / "read_cache_summary"
     subprocess.run(
