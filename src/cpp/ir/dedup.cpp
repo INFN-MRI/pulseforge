@@ -1913,7 +1913,13 @@ int pulseg__get_unique_blocks(
             result = PULSEG_ERR_INVALID_ARGUMENT;
             goto fail;
         }
-        int_rows[n][0] = raw.block_duration >= 0 ? raw.block_duration : 0;
+        /* A pure delay's length is a per-instance value -- an interpreter
+         * sets how long it waits there at run time -- so it is left out of
+         * the key and every pure delay is one definition. */
+        int_rows[n][0] =
+            (raw.rf < 0 && raw.gx < 0 && raw.gy < 0 && raw.gz < 0 && raw.adc < 0)
+            ? 0
+            : (raw.block_duration >= 0 ? raw.block_duration : 0);
         int_rows[n][1] = (raw.rf >= 0 && tmp_rf_tab) ? tmp_rf_tab[raw.rf].id : -1;
         int_rows[n][2] = (raw.gx >= 0 && tmp_grad_tab) ? tmp_grad_tab[raw.gx].id : -1;
         int_rows[n][3] = (raw.gy >= 0 && tmp_grad_tab) ? tmp_grad_tab[raw.gy].id : -1;
@@ -2031,8 +2037,15 @@ int pulseg__get_unique_blocks(
             if (def_map[k] != k)
                 continue;
             tmp_blk_defs[dense].id = unique_defs[k];
+            /* A pure delay's key carries no duration, so its definition
+             * takes the length the instance that introduced it waits; the
+             * block table carries what each instance waits. */
             tmp_blk_defs[dense].duration_us =
-                (int)(int_rows[unique_defs[k]][0] * desc->block_raster_us);
+                (int_rows[unique_defs[k]][1] < 0 && int_rows[unique_defs[k]][2] < 0 &&
+                 int_rows[unique_defs[k]][3] < 0 && int_rows[unique_defs[k]][4] < 0 &&
+                 int_rows[unique_defs[k]][5] < 0)
+                ? tmp_blk_tab[unique_defs[k]].duration_us
+                : (int)(int_rows[unique_defs[k]][0] * desc->block_raster_us);
             tmp_blk_defs[dense].rf_id = int_rows[unique_defs[k]][1];
             tmp_blk_defs[dense].gx_id = int_rows[unique_defs[k]][2];
             tmp_blk_defs[dense].gy_id = int_rows[unique_defs[k]][3];

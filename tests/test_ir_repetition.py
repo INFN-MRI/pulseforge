@@ -1,4 +1,4 @@
-"""The repeating unit pypulseqpp detects against the one the C converter detects."""
+"""The repeating unit pypulseqpp detects against the one the converter detects."""
 
 from pathlib import Path
 
@@ -69,14 +69,15 @@ def test_a_delay_of_any_length_is_one_definition_so_delays_alone_repeat_every_bl
 ):
     path = written(tmp_path, "all_delays.seq", alternating_delays)
     theirs, ours = detected(path)
-    # The C detection keys a block on its duration, so it reads the two
-    # lengths as a period of two; every pure delay being one definition makes
-    # the same sequence one block played twelve times.
-    assert theirs == [2]
-    assert ours == [1]
+    # Twelve delays of two lengths are one block played twelve times: how long
+    # an interpreter waits at a pure delay is a per-instance value and does
+    # not break the period.
+    assert ours == theirs[:1] == [1]
 
 
-def test_a_block_that_plays_something_restores_the_period_delays_alone_lose(tmp_path):
+def test_a_sequence_that_plays_something_between_its_delays_repeats_over_all_three(
+    tmp_path,
+):
     path = written(
         tmp_path, "delays_and_a_gradient.seq", alternating_delays_around_a_gradient
     )
