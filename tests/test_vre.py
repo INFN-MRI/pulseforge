@@ -3,6 +3,7 @@
 import json
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +35,7 @@ HEADER = """<?xml version="1.0"?>
   <userParameters>
     <userParameterLong><name>pulserver_revision</name><value>{revision}</value></userParameterLong>
     <userParameterString><name>pulserver_session</name><value>{session}</value></userParameterString>
+    {offset}
   </userParameters>
 </ismrmrdHeader>
 """
@@ -90,28 +92,52 @@ def start_proxy(bucket):
         thread.join(timeout=DEADLINE)
 
 
-def stream(port, series, *, config=""):
+def header_xml(series, offset_mm=None):
+    offset = ""
+    if offset_mm is not None:
+        value = " ".join(f"{component:g}" for component in offset_mm)
+        offset = (
+            "<userParameterString><name>pulserver_fov_offset_mm</name>"
+            f"<value>{value}</value></userParameterString>"
+        )
+    return HEADER.format(
+        channels=CHANNELS,
+        session=series.session,
+        revision=series.revision,
+        offset=offset,
+    )
+
+
+def flat(table, index):
+    return np.ones((CHANNELS, int(table.num_samples[index])), dtype=np.complex64)
+
+
+def point(table, index, position_m):
+    """k-space of a point object at ``position_m``, in metres along the gradient axes."""
+    start = int(table.sample_offset[index])
+    k = table.k[:, start : start + int(table.num_samples[index])].astype(np.float64)
+    samples = np.exp(-2j * np.pi * (np.asarray(position_m) @ k))
+    return np.broadcast_to(samples, (CHANNELS, samples.size)).astype(np.complex64)
+
+
+def stream(port, series, *, config="", offset_mm=None, data=flat):
     """Play one series' readouts as the scanner client does; return what came back."""
     stream = socket.create_connection(("127.0.0.1", port), timeout=DEADLINE)
     connection = Connection(stream)
     stream.settimeout(DEADLINE)
     connection.send_config(config)
-    connection.send_header(
-        HEADER.format(
-            channels=CHANNELS, session=series.session, revision=series.revision
-        )
-    )
+    connection.send_header(header_xml(series, offset_mm))
     for index in range(len(series.table)):
-        samples = int(series.table.num_samples[index])
-        connection.send(
-            ismrmrd.Acquisition.from_array(
-                np.ones((CHANNELS, samples), dtype=np.complex64)
-            )
-        )
+        connection.send(ismrmrd.Acquisition.from_array(data(series.table, index)))
     connection.send_close()
     received = list(connection)
     connection.shutdown_close()
     return received
+
+
+def peak(image):
+    picture = np.squeeze(np.asarray(image.data))
+    return np.unravel_index(int(np.argmax(picture)), picture.shape)
 
 
 def images(received):
@@ -185,3 +211,78 @@ def test_the_spare_worker_is_replaced_after_each_series(start_proxy, bucket):
     assert replaced != warm
     assert len(images(stream(proxy.port, series["bound"]))) == 1
     assert proxy.workers.spare_pids() not in (warm, replaced)
+
+
+def queue_directory(bucket_base, series):
+    return bucket_base / "bucket" / series.session / "queue"
+
+
+def test_a_series_with_every_slot_busy_is_held_on_disk_until_one_frees(
+    start_proxy, bucket, tmp_path
+):
+    base, series = bucket
+    proxy = start_proxy(slots=1)
+    gate = tmp_path / "go"
+    trace = tmp_path / "trace"
+    trace.mkdir()
+    held = json.dumps(
+        {"parameters": {"config": "gre2d", "gate": str(gate), "trace": str(trace)}}
+    )
+    received = {}
+
+    def play(name, config):
+        received[name] = stream(proxy.port, series["bound"], config=config)
+
+    first = threading.Thread(target=play, args=("held", held))
+    first.start()
+    queue = queue_directory(base, series["bound"])
+    _wait_until(gate.with_name("go.waiting").exists, "the held series never started")
+
+    second = threading.Thread(
+        target=play,
+        args=(
+            "queued",
+            json.dumps({"parameters": {"config": "gre2d", "trace": str(trace)}}),
+        ),
+    )
+    second.start()
+    _wait_until(lambda: len(list(queue.glob("*.h5"))) == 1, "no series was queued")
+
+    gate.touch()
+    for thread in (first, second):
+        thread.join(timeout=DEADLINE)
+
+    assert set(received) == {"held", "queued"}
+    assert all(len(images(items)) == 1 for items in received.values())
+    assert not list(queue.glob("*.h5"))
+
+
+def _wait_until(condition, message, timeout=DEADLINE):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(0.02)
+    raise AssertionError(message)
+
+
+def test_a_point_at_the_prescription_centre_reconstructs_at_the_image_centre(
+    start_proxy, bucket
+):
+    _, series = bucket
+    proxy = start_proxy(slots=1)
+    table = series["bound"].table
+    fov_mm = table.spaces[0].fov_mm
+    pixel_mm = (fov_mm[0] / MATRIX["nx"], fov_mm[1] / MATRIX["ny"])
+    offset_mm = (2 * pixel_mm[0], 3 * pixel_mm[1], 0.0)
+    position = 1e-3 * np.array(offset_mm)
+
+    def kspace(table, index):
+        return point(table, index, position)
+
+    centred = stream(proxy.port, series["bound"], offset_mm=offset_mm, data=kspace)
+    uncentred = stream(proxy.port, series["bound"], data=kspace)
+
+    centre = (MATRIX["ny"] // 2, MATRIX["nx"] // 2)
+    assert peak(images(centred)[0]) == centre
+    assert peak(images(uncentred)[0]) == (centre[0] + 3, centre[1] + 2)

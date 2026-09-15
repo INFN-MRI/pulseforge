@@ -1,6 +1,7 @@
 """Writers for MRD streaming messages; each takes a destination with ``write(bytes)``."""
 
 __all__ = [
+    "header_document",
     "write_acquisition",
     "write_acquisition_header",
     "write_array",
@@ -174,12 +175,17 @@ def write_config_text(destination: Any, contents: str) -> None:
     destination.write(contents_with_nul)
 
 
+def header_document(header: Any) -> str | bytes:
+    """Return an MRD header as its XML document; text is returned as it stands."""
+    return header if isinstance(header, (str, bytes)) else header.toXML("utf-8")
+
+
 def write_header(destination: Any, header: Any) -> None:
     """Write an MRD XML header message, from an ``ismrmrd.xsd`` header or its document."""
     destination.write(
         constants.GadgetMessageIdentifier.pack(constants.GADGET_MESSAGE_HEADER)
     )
-    document = header if isinstance(header, (str, bytes)) else header.toXML("utf-8")
+    document = header_document(header)
     write_byte_string(
         destination, document.encode() if isinstance(document, str) else document
     )

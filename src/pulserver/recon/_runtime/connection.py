@@ -29,6 +29,7 @@ from .readers import (
     read_waveform,
 )
 from .writers import (
+    header_document,
     write_acquisition,
     write_config_text,
     write_dicom,
@@ -130,7 +131,7 @@ class DataSaver:
         self.dset._file.require_group("dataset")
         try:
             if mid == constants.GADGET_MESSAGE_HEADER:
-                self.dset.write_xml_header(item.toxml())
+                self.dset.write_xml_header(header_document(item))
             elif mid == constants.GADGET_MESSAGE_ISMRMRD_ACQUISITION:
                 self.dset.append_acquisition(item)
             elif mid == constants.GADGET_MESSAGE_ISMRMRD_WAVEFORM:

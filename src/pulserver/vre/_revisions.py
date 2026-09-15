@@ -46,6 +46,11 @@ class Revision:
     recon: str
     table: SequenceTable
 
+    @property
+    def session_directory(self) -> Path:
+        """``bucket/<session>/``, which the revision and the session's queue share."""
+        return self.directory.parent.parent
+
 
 class RevisionStore:
     """The revisions under ``<base>/bucket``, each read once and kept.

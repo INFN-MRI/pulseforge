@@ -5,12 +5,15 @@ from __future__ import annotations
 __all__ = ["ReconProxy"]
 
 import contextlib
+import itertools
 import logging
+import os
 import re
 import shutil
 import socket
 import tempfile
 import threading
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,7 @@ from ..recon._runtime.concurrency import compute_max_concurrent
 from ..recon._runtime.connection import Connection
 from ..recon._runtime.readers import deserialize_config, read_text
 from ._enrich import enrich_acquisition, enrich_header, fov_offset_m
+from ._queue import QueueFile
 from ._revisions import Revision, RevisionStore
 from ._workers import WorkerPool
 
@@ -46,6 +50,11 @@ class ReconProxy:
     A series holds a slot for as long as it runs. Its worker's images, DICOM
     and text go back to the client as they arrive, the client's close closes
     the worker, and the worker's close closes the client.
+
+    A series that finds every slot busy is queued instead: its enriched stream
+    is written to ``bucket/<session>/queue/<id>.h5`` while it arrives, its
+    client stays connected, and the file is replayed to a worker and deleted
+    once a slot frees.
 
     Parameters
     ----------
@@ -79,6 +88,7 @@ class ReconProxy:
         self._server: socket.socket | None = None
         self._closing = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._queued = itertools.count(1)
 
     def bind(self, port: int = 0) -> int:
         """Listen on ``port`` and return the port bound; 0 takes a free one."""
@@ -161,18 +171,21 @@ class ReconProxy:
             plugin.stem,
             len(revision.table),
         )
-        with self._slot():
-            self._reconstruct(client, config, header, revision, plugin, offset)
+        if self._slots.acquire(blocking=False):
+            try:
+                self._run(
+                    client,
+                    config,
+                    header,
+                    plugin,
+                    lambda worker: _forward(client, worker, revision, offset),
+                )
+            finally:
+                self._slots.release()
+            return
+        self._queue(client, config, header, revision, plugin, offset)
 
-    @contextlib.contextmanager
-    def _slot(self) -> Any:
-        self._slots.acquire()
-        try:
-            yield
-        finally:
-            self._slots.release()
-
-    def _reconstruct(
+    def _queue(
         self,
         client: Connection,
         config: str,
@@ -181,6 +194,38 @@ class ReconProxy:
         plugin: Path,
         offset: Any,
     ) -> None:
+        """Hold the series on disk until a slot frees, then replay it to a worker."""
+        queued = QueueFile(
+            revision.session_directory
+            / "queue"
+            / f"{os.getpid()}-{next(self._queued)}.h5"
+        )
+        _log.info("queued %s on %s", queued.path.name, revision.directory)
+        try:
+            others = _record(client, header, revision, offset, queued)
+            self._slots.acquire()
+            try:
+                self._run(
+                    client,
+                    config,
+                    header,
+                    plugin,
+                    lambda worker: _replay(queued, others, worker),
+                )
+            finally:
+                self._slots.release()
+        finally:
+            queued.unlink()
+
+    def _run(
+        self,
+        client: Connection,
+        config: str,
+        header: Any,
+        plugin: Path,
+        feed: Callable[[Connection], None],
+    ) -> None:
+        """Give a worker the config, the header and whatever ``feed`` sends it."""
         with _WorkerChannel(self.workers, plugin) as worker:
             worker.send_config(config)
             worker.send_header(header)
@@ -189,7 +234,7 @@ class ReconProxy:
             )
             relay.start()
             try:
-                _forward(client, worker, revision, offset)
+                feed(worker)
             finally:
                 worker.send_close()
                 relay.join(timeout=_WORKER_TIMEOUT)
@@ -278,14 +323,12 @@ def _is_close_marker(item: Any) -> bool:
     )
 
 
-def _forward(
-    client: Connection, worker: Connection, revision: Revision, offset: Any
-) -> None:
-    """Send the client's stream to the worker, acquisitions enriched in play order."""
+def _enriched(client: Connection, revision: Revision, offset: Any) -> Iterator[Any]:
+    """Yield the client's stream up to its close, acquisitions enriched in play order."""
     index = 0
     for item in client:
         if _is_close_marker(item):
-            break
+            return
         if isinstance(item, ismrmrd.Acquisition):
             if index >= len(revision.table):
                 raise ValueError(
@@ -294,6 +337,42 @@ def _forward(
                 )
             enrich_acquisition(item, revision.table, index, offset)
             index += 1
+        yield item
+
+
+def _forward(
+    client: Connection, worker: Connection, revision: Revision, offset: Any
+) -> None:
+    """Send the client's stream to the worker as it arrives."""
+    for item in _enriched(client, revision, offset):
+        worker.send(item)
+
+
+def _record(
+    client: Connection,
+    header: Any,
+    revision: Revision,
+    offset: Any,
+    queued: QueueFile,
+) -> list[Any]:
+    """Store the client's stream until it closes; return what the file cannot hold."""
+    queued.write_header(header)
+    others: list[Any] = []
+    try:
+        for item in _enriched(client, revision, offset):
+            if isinstance(item, (ismrmrd.Acquisition, ismrmrd.Waveform)):
+                queued.append(item)
+            else:
+                others.append(item)
+    finally:
+        queued.close()
+    return others
+
+
+def _replay(queued: QueueFile, others: list[Any], worker: Connection) -> None:
+    for item in others:
+        worker.send(item)
+    for item in queued:
         worker.send(item)
 
 
