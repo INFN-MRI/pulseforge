@@ -32,6 +32,29 @@ before it reaches the interpreter.
 Build and test steps are mandatory before reporting a change complete. Run them
 and report the exact output; do not assume success.
 
+## The scanner IR, and where each half of it lives
+
+A sequence becomes the binary cache a scanner plays in three steps, and the
+language each is written in is a consequence of who runs it.
+
+`pypulseqpp` reads the `.seq` file, text or binary. No C or C++ here parses
+one, so there is one reader of the format and it is the engine's.
+
+`src/cpp/ir/` segments what it read: event deduplication, the repeating unit,
+the virtual segments, the execution stream and the label table, fed the
+libraries a `pypulseqpp.Sequence` holds. It is C++ because only the host runs
+it.
+
+`src/c/` is what a scanner links: the cache writer and reader, the accessors
+a playout walks the loaded collection with, the protocol transfer and the
+shell caller. It stays C89 for that reason alone, and it has to stay complete
+on its own — `tests/test_ir.py` compiles every `.c` under it as the scanner
+does, 32-bit and vendor-tagged, and reads back a cache written here.
+
+So a pass that runs on the host belongs in `src/cpp/ir/`, and nothing in
+`src/c/` may call one. Safety checks are `pypulseqpp.safety`'s, and sequence
+analysis that belongs to an engine goes upstream rather than into a copy here.
+
 ## Tests
 
 pytest with plain functions and fixtures — never `unittest.TestCase`. A test

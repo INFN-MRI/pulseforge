@@ -269,7 +269,10 @@ class ScannerSequence:
     def generate(
         self, system: pp.Opts, request: Mapping[str, Any], directory: Path
     ) -> tuple[Validation, list[str]]:
-        """Write the resolved design into ``directory`` as signed text Pulseq.
+        """Write the resolved design into ``directory`` as signed binary Pulseq.
+
+        The files keep the ``.seq`` name a chain names them by; what is in them
+        is the binary form, which the scanner IR conversion reads.
 
         Returns
         -------
@@ -282,8 +285,7 @@ class ScannerSequence:
         app, validation = self._resolve(system, request)
         if app is None:
             return validation, []
-        # Text: the IR converter does not read pypulseqpp's binary definitions.
-        return validation, app.write(Path(directory) / "sequence.seq", offline=True)
+        return validation, app.write(Path(directory) / "sequence.seq", offline=False)
 
     def _resolve(
         self, system: pp.Opts, request: Mapping[str, Any]
