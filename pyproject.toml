@@ -36,6 +36,15 @@ dev = [
   "build",
 ]
 
+doc = [
+  "sphinx>=7.0",
+  "sphinx-book-theme>=1.1",
+  "myst-parser>=4.0",
+  "linkify-it-py>=2.0",
+  "sphinx-copybutton>=0.5",
+  "matplotlib>=3.8",
+]
+
 [project.urls]
 Homepage = "https://github.com/pulserver/pulserver"
 Issues = "https://github.com/pulserver/pulserver/issues"

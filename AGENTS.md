@@ -18,9 +18,10 @@ upstream into that engine, not into a copy here.
 ## Build and test
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev,doc]
 bash scripts/format_and_lint.sh   # rewrites in place; --check to verify only
 pytest -q
+bash scripts/build_docs.sh        # figures, then Sphinx; warnings are errors
 ```
 
 Build and test steps are mandatory before reporting a change complete. Run them
