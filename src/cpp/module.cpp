@@ -38,8 +38,6 @@ using Collection = std::unique_ptr<pulseg_collection, CollectionFree>;
 pulseg_opts make_opts(
     float gamma_hz_per_t,
     float b0_t,
-    float max_grad_hz_per_m,
-    float max_slew_hz_per_m_per_s,
     float rf_raster_us,
     float grad_raster_us,
     float adc_raster_us,
@@ -54,8 +52,6 @@ pulseg_opts make_opts(
         &opts,
         gamma_hz_per_t,
         b0_t,
-        max_grad_hz_per_m,
-        max_slew_hz_per_m_per_s,
         rf_raster_us,
         grad_raster_us,
         adc_raster_us,
@@ -124,7 +120,6 @@ py::dict summarize(const pulseg_collection *coll)
         entry["tr_size"] = s.tr_size;
         entry["num_unique_adcs"] = s.num_unique_adcs;
         entry["num_unique_rf"] = s.num_unique_rf;
-        entry["num_canonical_trs"] = s.num_canonical_trs;
         entry["num_tr_instances"] = s.num_tr_instances;
         entry["tr_groups"] = tr_groups(coll, i);
         subsequences.append(entry);
@@ -325,8 +320,6 @@ PYBIND11_MODULE(_ext, module)
         [](const std::string &seq_path,
            float gamma_hz_per_t,
            float b0_t,
-           float max_grad_hz_per_m,
-           float max_slew_hz_per_m_per_s,
            float rf_raster_us,
            float grad_raster_us,
            float adc_raster_us,
@@ -339,8 +332,6 @@ PYBIND11_MODULE(_ext, module)
             const pulseg_opts opts = make_opts(
                 gamma_hz_per_t,
                 b0_t,
-                max_grad_hz_per_m,
-                max_slew_hz_per_m_per_s,
                 rf_raster_us,
                 grad_raster_us,
                 adc_raster_us,
@@ -356,8 +347,6 @@ PYBIND11_MODULE(_ext, module)
         [](const std::string &seq_path,
            float gamma_hz_per_t,
            float b0_t,
-           float max_grad_hz_per_m,
-           float max_slew_hz_per_m_per_s,
            float rf_raster_us,
            float grad_raster_us,
            float adc_raster_us,
@@ -367,8 +356,6 @@ PYBIND11_MODULE(_ext, module)
             const pulseg_opts opts = make_opts(
                 gamma_hz_per_t,
                 b0_t,
-                max_grad_hz_per_m,
-                max_slew_hz_per_m_per_s,
                 rf_raster_us,
                 grad_raster_us,
                 adc_raster_us,
@@ -441,8 +428,6 @@ PYBIND11_MODULE(_ext, module)
            const std::string &seq_path,
            float gamma_hz_per_t,
            float b0_t,
-           float max_grad_hz_per_m,
-           float max_slew_hz_per_m_per_s,
            float rf_raster_us,
            float grad_raster_us,
            float adc_raster_us,
@@ -454,8 +439,6 @@ PYBIND11_MODULE(_ext, module)
             const pulseg_opts opts = make_opts(
                 gamma_hz_per_t,
                 b0_t,
-                max_grad_hz_per_m,
-                max_slew_hz_per_m_per_s,
                 rf_raster_us,
                 grad_raster_us,
                 adc_raster_us,

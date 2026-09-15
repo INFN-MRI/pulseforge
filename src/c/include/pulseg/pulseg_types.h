@@ -134,26 +134,19 @@ typedef struct pulseg_rf_view
 /* ================================================================== */
 
 /**
- * @brief Scanner hardware limits and raster times.
+ * @brief The scanner the conversion reads a sequence for.
  *
- * All raster times are in microseconds.  Gradient / slew limits use
- * internal Pulseq units (Hz/m and Hz/m/s respectively).
+ * All raster times are in microseconds.
  */
 typedef struct pulseg_opts
 {
     int vendor;                    /**< PULSEG_VENDOR_* constant       */
     float gamma_hz_per_t;          /**< gyromagnetic ratio  (Hz / T)      */
     float b0_t;                    /**< static field strength (T)         */
-    float max_grad_hz_per_m;       /**< gradient amplitude limit (Hz / m) */
-    float max_slew_hz_per_m_per_s; /**< slew rate limit (Hz / m / s)      */
     float rf_raster_us;            /**< RF sample raster (us)             */
     float grad_raster_us;          /**< gradient sample raster (us)       */
     float adc_raster_us;           /**< ADC dwell raster (us)             */
     float block_raster_us;         /**< block duration raster (us)        */
-    float peak_log10_threshold;    /**< resonance detector log10 threshold */
-    float peak_norm_scale;         /**< resonance detector normalization   */
-    float peak_eps;                /**< resonance detector epsilon         */
-    float peak_prominence;         /**< resonance detector min prominence  */
 
     /** Optional vendor RF envelope-stats callback. NULL -> the four
      *  pulseg_rf_stats.vendor_stat[] slots are left at 0. */
@@ -204,21 +197,6 @@ typedef struct pulseg_opts
      */
     int allow_variable_rf_amplitude;
     /**
-     * @brief Optional host-side parallel loop for the safety engine.
-     *
-     * NULL runs every loop sequentially, which is what a scanner-side build
-     * gets. A host that has cores to spare installs a function that calls
-     * @p body over disjoint ranges covering [0, count) -- from any threads
-     * it likes -- and returns once every call has returned. Each body call
-     * is independent and owns its scratch, so no order is assumed.
-     */
-    void (*parallel_for_fn)(
-        void *ctx,
-        int count,
-        void (*body)(void *arg, int begin, int end),
-        void *arg);
-    void *parallel_ctx;
-    /**
      * @brief Convert only what the scan's structure needs.
      *
      * A file written for structure alone carries its gradient shapes without
@@ -237,39 +215,13 @@ typedef struct pulseg_opts
      * buffer alive for as long as the collection lives. Default 0.
      */
     int borrow_buffer_shapes;
-    /**
-     * @brief The scanner prescription as the frame of the gradient safety
-     * checks.
-     *
-     * prescription_rotation is row-major with physical = R * logical, the
-     * matrix the scanner programs for the scan (GE: scan_info[0].oprot). With
-     * has_prescription_rotation set the checks judge every per-axis quantity
-     * -- forbidden bands tagged with an axis, SAFE stimulation -- in that
-     * frame: R left of each ROTATIONS matrix, R alone on a block without
-     * one, identity on a block flagged NOROT. Clear (the default) means the
-     * frame the sequence was designed in.
-     */
-    int has_prescription_rotation;
-    float prescription_rotation[9];
-    /**
-     * @brief The resonance memory the mechanical-resonance check reads over (us).
-     *
-     * The window over which drive at a band frequency is summed: the ring-up
-     * time of the mode the band stands for. Default 20000 (a Q of about 30
-     * at a kilohertz). Trains and combs read the same at any memory; it
-     * decides how much of a frequency sweep or a short burst counts.
-     */
-    float mech_memory_us;
 } pulseg_opts;
 
 /* clang-format off */
 #define PULSEG_OPTS_INIT \
     { \
-    0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, \
-    PULSEG_PEAK_LOG10_THRESHOLD_DEFAULT, PULSEG_PEAK_NORM_SCALE_DEFAULT, \
-    PULSEG_PEAK_EPS_DEFAULT, PULSEG_PEAK_PROMINENCE_DEFAULT, NULL, NULL, {0, 1, 2}, \
-    PULSEG_CACHE_EXT_DEFAULT, NULL, NULL, 1, NULL, NULL, 0, 0, \
-    0, {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}, 20000.0f \
+    0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, NULL, NULL, {0, 1, 2}, \
+    PULSEG_CACHE_EXT_DEFAULT, NULL, NULL, 1, 0, 0 \
     }
 /* clang-format on */
 
@@ -382,307 +334,6 @@ typedef struct pulseg_tr_group
  */
 typedef struct pulseg_collection pulseg_collection;
 
-/* ================================================================== */
-/*  Per-axis gradient waveform (for plotting)                         */
-/* ================================================================== */
-
-/**
- * @brief Single-axis gradient waveform with per-sample segment label.
- *
- * Each element i represents a time-point with amplitude and the
- * segment it belongs to.  The time array is NOT interpolated to a
- * uniform raster -- it follows the native event timing.
- */
-typedef struct pulseg_grad_axis_waveform
-{
-    int num_samples;           /**< number of time-points          */
-    float *time_us;            /**< time of each sample (us)       */
-    float *amplitude_hz_per_m; /**< gradient amplitude (Hz / m)    */
-    int *seg_label;            /**< segment index for each sample  */
-} pulseg_grad_axis_waveform;
-
-/* clang-format off */
-#define PULSEG_GRAD_AXIS_WAVEFORM_INIT {0, NULL, NULL, NULL}
-/* clang-format on */
-
-/**
- * @brief Per-TR gradient waveforms for all three axes.
- *
- * Used for gradient-shape plotting in the wrapper.  Each axis carries
- * its own time base (not interpolated to a common raster).
- */
-typedef struct pulseg_tr_gradient_waveforms
-{
-    pulseg_grad_axis_waveform gx;
-    pulseg_grad_axis_waveform gy;
-    pulseg_grad_axis_waveform gz;
-} pulseg_tr_gradient_waveforms;
-
-/* clang-format off */
-#define PULSEG_TR_GRADIENT_WAVEFORMS_INIT \
-    { \
-    PULSEG_GRAD_AXIS_WAVEFORM_INIT, PULSEG_GRAD_AXIS_WAVEFORM_INIT, \
-    PULSEG_GRAD_AXIS_WAVEFORM_INIT \
-    }
-/* clang-format on */
-
-/* ================================================================== */
-/*  Native-timing TR waveforms (for plotting)                        */
-/* ================================================================== */
-
-/** @brief Amplitude modes for pulseg_get_tr_waveforms. */
-#define PULSEG_AMP_MAX_POS 0  /**< Position-max (safety worst case) */
-#define PULSEG_AMP_ZERO_VAR 1 /**< Zero variable-amplitude gradients, keep constant ones */
-#define PULSEG_AMP_ACTUAL 2   /**< Actual signed amplitude for given TR */
-
-/**
- * @brief Single-channel waveform with native (non-uniform) timing.
- *
- * Both arrays have @c num_samples elements.  Units depend on the
- * channel:  Hz/m for gradients, Hz for RF magnitude, radians for
- * RF phase.
- */
-typedef struct pulseg_channel_waveform
-{
-    int num_samples;
-    float *time_us;   /**< [num_samples] */
-    float *amplitude; /**< [num_samples] */
-} pulseg_channel_waveform;
-
-/* clang-format off */
-#define PULSEG_CHANNEL_WAVEFORM_INIT {0, NULL, NULL}
-/* clang-format on */
-
-/**
- * @brief Joined gradient corner points for one TR.
- *
- * All three axes share @c time_us: the union of their native breakpoints,
- * with coincident times collapsed.  Between consecutive points every axis
- * is linear, so this is the whole waveform, not a sampling of it.  Block
- * rotations are already applied.
- */
-typedef struct pulseg_corner_point_stream
-{
-    int num_points;
-    float *time_us;     /**< [num_points] shared time base (us)  */
-    float *gx_hz_per_m; /**< [num_points]                        */
-    float *gy_hz_per_m; /**< [num_points]                        */
-    float *gz_hz_per_m; /**< [num_points]                        */
-} pulseg_corner_point_stream;
-
-/* clang-format off */
-#define PULSEG_CORNER_POINT_STREAM_INIT {0, NULL, NULL, NULL, NULL}
-/* clang-format on */
-
-/**
- * @brief ADC event descriptor within a TR.
- */
-typedef struct pulseg_adc_event
-{
-    float onset_us;         /**< start time within TR (us)         */
-    float duration_us;      /**< num_samples * dwell_time (us)     */
-    int num_samples;        /**< number of ADC samples             */
-    float freq_offset_hz;   /**< per-instance freq offset (Hz)     */
-    float phase_offset_rad; /**< per-instance phase offset (rad)   */
-} pulseg_adc_event;
-
-/**
- * @brief Per-block metadata within a TR.
- */
-typedef struct pulseg_tr_block_descriptor
-{
-    float start_us;        /**< block start time within TR (us)   */
-    float duration_us;     /**< block duration (us)               */
-    int segment_idx;       /**< segment index, or -1 (prep/cooldown) */
-    float rf_isocenter_us; /**< RF isocenter time within TR (us), or -1.0 */
-} pulseg_tr_block_descriptor;
-
-/**
- * @brief Complete native-timing TR waveforms for plotting.
- *
- * Each channel carries its own time base.  Gradient channels
- * preserve native timing (trap corner-points, arb raster samples).
- * RF channels use the RF raster.  ADC events are descriptors only.
- *
- * Block descriptors provide timing and segment assignment for
- * drawing block/segment boundaries.
- */
-typedef struct pulseg_tr_waveforms
-{
-    /* Gradient channels (Hz/m) */
-    pulseg_channel_waveform gx;
-    pulseg_channel_waveform gy;
-    pulseg_channel_waveform gz;
-
-    /* RF channels.  num_rf_channels == 1 for single-Tx.  For pTx
-     * (num_rf_channels > 1), rf_mag.amplitude and rf_phase.amplitude
-     * are channel-major flat arrays: ch0[0..npts-1], ch1[0..npts-1], ...
-     * rf_mag.num_samples == num_rf_channels * npts_per_channel.       */
-    int num_rf_channels;              /**< 1 for single-Tx, nch for pTx */
-    pulseg_channel_waveform rf_mag;   /**< amplitude in Hz           */
-    pulseg_channel_waveform rf_phase; /**< amplitude in rad          */
-
-    /* ADC events */
-    int num_adc_events;
-    pulseg_adc_event *adc_events;
-
-    /* Block-level metadata */
-    int num_blocks;
-    pulseg_tr_block_descriptor *blocks;
-
-    /* Total duration */
-    float total_duration_us;
-} pulseg_tr_waveforms;
-
-/* ================================================================== */
-/*  Mechanical resonances spectra (for plotting)                      */
-/* ================================================================== */
-
-/**
- * @brief Mechanical resonances spectral data for wrapper-side plotting.
- *
- * Frequency axes are specified by (min, spacing, num_bins) so
- * the caller can reconstruct: freq[k] = freq_min_hz + k * freq_spacing_hz.
- *
- * The canonical mechanical-resonance verdict is provided by the
- * structural-analysis arrays (analytical_*, candidate_*, component_*,
- * surviving_*).  spectrum_full_g{x,y,z} are display-only full-TR
- * magnitude spectra.
- */
-typedef struct pulseg_mech_resonances_spectra
-{
-    /* -- full TR spectrum (display-only) --------------------------- */
-    float freq_min_hz;       /**< lowest frequency bin (Hz)         */
-    float freq_spacing_hz;   /**< bin width (Hz)                    */
-    int num_freq_bins;       /**< frequency bins                    */
-    float *spectrum_full_gx; /**< [num_freq_bins]                   */
-    float *spectrum_full_gy;
-    float *spectrum_full_gz;
-
-    /* -- repetition info ------------------------------------------- */
-    int num_instances; /**< TR repetition count (for display) */
-
-    /* -- analytical structural spectrum (sparse TR-harmonic grid) -- */
-    int num_analytical_peaks;      /**< evaluated harmonic count        */
-    float *analytical_peak_freqs;  /**< [num_analytical_peaks] (Hz)     */
-    float *analytical_peak_amp_gx; /**< [num_analytical_peaks] |S_gx|   */
-    float *analytical_peak_amp_gy;
-    float *analytical_peak_amp_gz;
-    float *analytical_peak_phase_gx; /**< [num_analytical_peaks] arg(S_gx) (rad) */
-    float *analytical_peak_phase_gy;
-    float *analytical_peak_phase_gz;
-    float *analytical_peak_widths_hz; /**< [num_analytical_peaks] FWHM (Hz) */
-
-    /* -- structural candidate frequencies (shared cross-axis) ----- */
-    int num_candidates;       /**< candidate count (shared)         */
-    float *candidate_freqs;   /**< [num_candidates] (Hz)            */
-    float *candidate_amps_gx; /**< per-axis analytical amplitudes   */
-    float *candidate_amps_gy;
-    float *candidate_amps_gz;
-    float *candidate_grad_amps;    /**< max time-domain grad amp (Hz/m)  */
-    float *candidate_grad_amps_gx; /**< per-axis contributing grad amp (Hz/m) */
-    float *candidate_grad_amps_gy;
-    float *candidate_grad_amps_gz;
-    int *candidate_violations; /**< 1 = violates a band              */
-
-    /* -- component-level sparse analytical terms ------------------ */
-    int num_component_terms;     /**< number of sparse component terms */
-    float *component_freqs_hz;   /**< [num_component_terms] term center (Hz) */
-    float *component_amps;       /**< [num_component_terms] |term| (Hz/m) */
-    float *component_phases_rad; /**< [num_component_terms] arg(term) (rad) */
-    float *component_widths_hz;  /**< [num_component_terms] FWHM (Hz) */
-    int *component_axes;         /**< [num_component_terms] 0=gx,1=gy,2=gz */
-    int *component_def_ids;      /**< [num_component_terms] grad def id */
-    int *component_contrib_ids;  /**< [num_component_terms] axis-local contrib id */
-    int *component_run_ids;      /**< [num_component_terms] run index within contrib */
-
-    /* -- surviving sparse peak positions (positions only) --------- */
-    int num_surviving_freqs;   /**< surviving candidate frequency count */
-    float *surviving_freqs_hz; /**< [num_surviving_freqs] (Hz) */
-
-    /* -- dense analytic envelope (display-only; plotting API only) ---
-     * The SAME closed-form S_ax(f) transform as analytical_peak_*, evaluated
-     * on a dense uniform grid (spectrum_full's freq_min_hz/freq_spacing_hz)
-     * instead of only at TR harmonics k/T_TR.  Because analytical_peak_* is
-     * literally this function sampled at k/T_TR, this array passes exactly
-     * through every analytical_peak_* point -- a true matched envelope, not
-     * an interpolation and not a separately-windowed/normalised FFT.
-     * Never populated on the pulseg_check_safety (PSD) path -- see
-     * calc_mech_resonances_from_uniform's compute_dense_envelope gate. */
-    int num_envelope_bins;    /**< dense envelope sample count (0 = not computed) */
-    float *envelope_freqs_hz; /**< [num_envelope_bins] (Hz), uniform grid    */
-    float *envelope_amp_gx;   /**< [num_envelope_bins] A_eq(f) = (2/T_TR)|S_gx(f)| (Hz/m) */
-    float *envelope_amp_gy;
-    float *envelope_amp_gz;
-
-    /* -- the verdict's terms --
-     * The tolerance each candidate was judged against, and the gradient
-     * definitions behind the loudest refused reading with their share of it
-     * (the reading is linear in the events, so the shares are exact). */
-    float *candidate_eps;      /**< [num_candidates] (Hz/m) */
-    int num_contributors;      /**< 0 when nothing was refused */
-    int *contributor_def_ids;  /**< [num_contributors] gradient definition ids, loudest first */
-    float *contributor_shares; /**< [num_contributors] |S_def| / |S| at the refused reading */
-    float contributor_freq_hz; /**< the refused reading's frequency */
-    int contributor_axis;      /**< its physical axis, 0 gx / 1 gy / 2 gz; -1 none */
-} pulseg_mech_resonances_spectra;
-
-/* clang-format off */
-#define PULSEG_MECH_RESONANCES_SPECTRA_INIT \
-    { \
-    /* freq_min_hz, freq_spacing_hz, num_freq_bins */ 0.0f, 0.0f, 0, /* \
-    spectrum_full_gx/gy/gz */ NULL, NULL, NULL, /* num_instances */ 0, /* \
-    num_analytical_peaks, analytical_peak_freqs, amp_gx/gy/gz, phase_gx/gy/gz, widths */ \
-    0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, /* num_candidates, \
-    candidate_freqs, amps_gx/gy/gz, grad_amps, grad_amps_gx/gy/gz, violations */ 0, \
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, /* num_component_terms, \
-    component_{freqs,amps,phases,widths,axes,def_ids,contrib_ids,run_ids} */ 0, NULL, \
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, /* num_surviving_freqs, surviving_freqs_hz \
-    */ 0, NULL, /* num_envelope_bins, envelope_freqs_hz, amp_gx/gy/gz */ 0, NULL, NULL, \
-    NULL, NULL, /* candidate_eps, num_contributors, contributor_def_ids, \
-    contributor_shares, contributor_freq_hz, contributor_axis */ NULL, 0, NULL, NULL, 0.0f, -1 \
-    }
-/* clang-format on */
-
-/* ================================================================== */
-/*  Forbidden frequency band (for mechanical resonance check)         */
-/* ================================================================== */
-
-/**
- * @brief A forbidden mechanical resonance frequency band.
- *
- * @c max_amplitude_hz_per_m is the maximum allowed gradient spectral
- * amplitude (in Hz / m) within the band [freq_min_hz, freq_max_hz].
- */
-typedef struct pulseg_forbidden_band
-{
-    float freq_min_hz;            /**< lower band edge (Hz)          */
-    float freq_max_hz;            /**< upper band edge (Hz)          */
-    float max_amplitude_hz_per_m; /**< max spectral amplitude (Hz/m) */
-    int axis_mask; /**< physical axes the band names: bit 0 x, 1 y, 2 z; 0 = every axis */
-} pulseg_forbidden_band;
-
-/**
- * @brief A band table, as one argument.
- *
- * A count and the array it measures travel together, so neither can be
- * passed without the other and neither splits an output from an input in a
- * parameter list.
- *
- * The bands are borrowed: this is a view, not an owner, and the array must
- * outlive every call it is passed to.  A @c count of 0 means no acoustic
- * gating is requested, and @c bands may then be NULL.
- */
-typedef struct pulseg_forbidden_band_list
-{
-    int count;                          /**< number of bands (0 = none)   */
-    const pulseg_forbidden_band *bands; /**< [count] borrowed band array  */
-} pulseg_forbidden_band_list;
-
-/* clang-format off */
-#define PULSEG_FORBIDDEN_BAND_LIST_INIT {0, NULL}
-/* clang-format on */
-
 /**
  * @brief A caller-owned character buffer the library writes into.
  *
@@ -698,199 +349,6 @@ typedef struct pulseg_text_buffer
 
 /* clang-format off */
 #define PULSEG_TEXT_BUFFER_INIT {0, NULL}
-/* clang-format on */
-
-/* ================================================================== */
-/*  Shared check preprocessing                                        */
-/* ================================================================== */
-
-/**
- * @brief Preprocessing the gradient checks reuse across calls.
- *
- * Opaque; see pulseg_check_plan_create() in pulseg_safety.h.
- */
-typedef struct pulseg_check_plan pulseg_check_plan;
-
-/**
- * @brief What a plan is allowed to keep.
- */
-typedef struct pulseg_check_plan_config
-{
-    /** Retained waveform bytes, in KiB, before the plan drops what it has
-     *  not used recently. 0 selects the library default. */
-    int cache_budget_kb;
-} pulseg_check_plan_config;
-
-/* clang-format off */
-#define PULSEG_CHECK_PLAN_CONFIG_INIT {0}
-/* clang-format on */
-
-/**
- * @brief What to compute a mechanical-resonance spectrum of.
- *
- * The knobs that shape the spectrum travel together so the call itself
- * carries only what it acts on.
- */
-typedef struct pulseg_mech_resonances_request
-{
-    int subseq_idx;                   /**< subsequence to analyse                     */
-    int canonical_tr_idx;             /**< TR instance, read only under
-                               PULSEG_AMP_ACTUAL                          */
-    int amplitude_mode;               /**< PULSEG_AMP_MAX_POS for the bound over every
-                               instance of the canonical TR, which is what
-                               pulseg_check_mech_resonances judges;
-                               PULSEG_AMP_ACTUAL for one instance exactly
-                               as it plays                                */
-    float target_resolution_hz;       /**< spectral resolution (0 = auto)       */
-    float max_freq_hz;                /**< highest frequency to report (0 = auto) */
-    pulseg_forbidden_band_list bands; /**< bands to mark; may be empty    */
-    int compress_trains;              /**< nonzero to evaluate equally-spaced
-                                     occurrence trains in compressed form,
-                                     exactly as the headless check does --
-                                     pass 1 for plots that must show the
-                                     lines the gate decides on. Pass 0 for
-                                     the uncompressed reference evaluation
-                                     of the same maths, in which a
-                                     component term maps to a single
-                                     materialised occurrence rather than a
-                                     train                                */
-} pulseg_mech_resonances_request;
-
-/* clang-format off */
-#define PULSEG_MECH_RESONANCES_REQUEST_INIT \
-    {0, 0, 0, 0.0f, 0.0f, PULSEG_FORBIDDEN_BAND_LIST_INIT, 0}
-/* clang-format on */
-
-/* ================================================================== */
-/*  PNS evaluator (vendor-pluggable model)                            */
-/* ================================================================== */
-
-/**
- * @brief Vendor-pluggable PNS model.
- *
- * The public library owns the vendor-neutral half of PNS evaluation
- * (canonical-TR selection, uniform-raster dG/dt extraction, combined
- * sqrt(x^2+y^2+z^2), result marshalling). The model half -- the actual
- * stimulation-threshold functional form (e.g. GE's rheobase-chronaxie
- * (Irnich/den Boer) `c/(c+tau)^2` kernel, or Siemens SAFE's nonlinear
- * multi-stage filter) -- is injected through this struct. Only an evaluator
- * interface (not a sampled-kernel API) can represent both forms.
- *
- * Calling convention (enforced by pulseg_calc_pns / pulseg_check_safety,
- * not by the model): before differentiating the uniform-raster gradient
- * waveforms, the safety core calls @c required_padding(ctx, dt_us) to
- * learn how many extra circularly-wrapped samples the model needs
- * appended so its filter sees a fully "warmed up" history (0 if none).
- * It then calls @c evaluate() once with the resulting dG/dt arrays,
- * all of length @c n (already including that padding) -- @c evaluate
- * must return exactly @c n output samples per axis.
- */
-typedef struct pulseg_pns_model
-{
-    void *ctx; /**< opaque model state (vendor-owned) */
-
-    /**
-     * @brief Report how many extra circular-wrap dG/dt samples this
-     * model needs appended before it is called, for a given raster.
-     * @param ctx    Opaque model state.
-     * @param dt_us  Gradient raster period (us).
-     * @return Number of extra samples (>= 0).
-     */
-    int (*required_padding)(void *ctx, float dt_us);
-
-    /**
-     * @brief Evaluate the model on uniform-raster dG/dt waveforms.
-     *
-     * dG/dt arrives in T/m/s, not Hz/m/s: the core divides the Hz/m
-     * gradient waveform by gamma before differentiating it (see
-     * compute_slew_rate in pulseg_safety.c), so a model receives the
-     * same units the vendor tables state their limits in.
-     *
-     * @param ctx     Opaque model state.
-     * @param dgdt_x  Per-axis dG/dt, X (T/m/s), length n.
-     * @param dgdt_y  Per-axis dG/dt, Y (T/m/s), length n.
-     * @param dgdt_z  Per-axis dG/dt, Z (T/m/s), length n.
-     * @param n       Number of samples (same length for all in/out arrays).
-     * @param dt_us   Gradient raster period (us).
-     * @param out_x   Receives per-axis result, X (% of threshold), length n.
-     * @param out_y   Receives per-axis result, Y (% of threshold), length n.
-     * @param out_z   Receives per-axis result, Z (% of threshold), length n.
-     * @return PULSEG_SUCCESS on success, negative error code on failure.
-     */
-    int (*evaluate)(
-        void *ctx,
-        const float *dgdt_x,
-        const float *dgdt_y,
-        const float *dgdt_z,
-        int n,
-        float dt_us,
-        float *out_x,
-        float *out_y,
-        float *out_z);
-
-    /**
-     * @brief Optional: expose this model as a linear time-invariant
-     * filter by handing back its impulse response.
-     *
-     * Setting this field is a claim about the model, not just a
-     * convenience: it asserts that @c evaluate is exactly the discrete
-     * convolution of each dG/dt axis with the returned kernel, followed
-     * by a per-sample scaling this call reports in @c out_scale. A model
-     * with any nonlinearity after the filter (thresholding, rectifying,
-     * cross-axis coupling) must leave this NULL.
-     *
-     * When it is set, the safety core may take a faster route to the
-     * same numbers: because convolution is linear, it can convolve each
-     * distinct gradient shape in the sequence once and then accumulate
-     * scaled, time-shifted copies, instead of convolving a waveform that
-     * spans the whole canonical TR. On a long TR built from a handful of
-     * repeated shapes that is one to two orders of magnitude cheaper.
-     * Leaving this NULL is always safe -- the core falls back to
-     * @c evaluate over the full waveform.
-     *
-     * The kernel stays vendor-owned: the core treats it as opaque data
-     * and never inspects its shape or the constants behind it.
-     *
-     * @param ctx         Opaque model state.
-     * @param dt_us       Gradient raster period (us).
-     * @param out_kernel  Receives a newly allocated kernel; the core
-     *                    frees it with PULSEG_FREE.
-     * @param out_len     Receives the kernel length (> 0).
-     * @param out_scale   Receives the per-sample output scaling
-     *                    @c evaluate applies after convolving (1.0 if
-     *                    none) -- e.g. 100 for a model reporting
-     *                    percent-of-threshold.
-     * @return PULSEG_SUCCESS on success, negative error code on failure.
-     */
-    int (*kernel)(void *ctx, float dt_us, float **out_kernel, int *out_len, float *out_scale);
-} pulseg_pns_model;
-
-/* clang-format off */
-#define PULSEG_PNS_MODEL_INIT {NULL, NULL, NULL, NULL}
-/* clang-format on */
-
-/* ================================================================== */
-/*  PNS result (for plotting)                                         */
-/* ================================================================== */
-
-/**
- * @brief Convolved slew-rate waveforms per axis.
- *
- * The wrapper can compute combined PNS = sqrt(x^2+y^2+z^2) and the
- * percentage per the injected model's threshold normalization.  This
- * avoids duplicating model logic across languages.
- */
-typedef struct pulseg_pns_result
-{
-    int num_samples;
-    float *slew_x_hz_per_m_per_s; /**< convolved dG/dt on X (Hz/m/s) */
-    float *slew_y_hz_per_m_per_s; /**< convolved dG/dt on Y (Hz/m/s) */
-    float *slew_z_hz_per_m_per_s; /**< convolved dG/dt on Z (Hz/m/s) */
-    int worst_group;              /**< canonical-TR group this window is */
-} pulseg_pns_result;
-
-/* clang-format off */
-#define PULSEG_PNS_RESULT_INIT {0, NULL, NULL, NULL, 0}
 /* clang-format on */
 
 /* ================================================================== */
@@ -1087,17 +545,15 @@ typedef struct pulseg_subseq_info
     int segment_offset;        /**< global segment index offset         */
     int num_adc_occurrences;   /**< ADC entries in label table          */
     int num_label_columns;     /**< label columns (vendor-dependent)    */
-    int num_canonical_trs;     /**< worst-case windows: one per shape group (>=1) */
     int num_gain_cal_readouts; /**< calibration readouts for APS2 gain cal (pislquant) */
-    /** How many TR instances pulseg_get_tr_waveforms() can name for this
-     *  subsequence: every TR the scanner plays.  Always >= 1. */
+    /** TR instances the subsequence plays; always >= 1. */
     int num_tr_instances;
 } pulseg_subseq_info;
 
 /* clang-format off */
 #define PULSEG_SUBSEQ_INFO_INIT \
     { \
-    0.0f, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1 \
+    0.0f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 \
     }
 /* clang-format on */
 

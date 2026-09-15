@@ -8,17 +8,8 @@ import pytest
 from pulserver import _ext
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sequences"
-# The limits the fixtures convert under; the period does not depend on them.
-LIMITS = (
-    42576000.0,
-    3.0,
-    40.0e3 * 42.576,
-    150.0e3 * 42.576,
-    2.0,
-    20.0,
-    2.0,
-    20.0,
-)
+# The scanner the fixtures convert for; the period does not depend on it.
+SCANNER = (42576000.0, 3.0, 2.0, 20.0, 2.0, 20.0)
 
 
 def fixtures():
@@ -27,7 +18,7 @@ def fixtures():
 
 def detected(path):
     """Blocks per repetition, as the C converter and as pypulseqpp see it."""
-    summary = _ext.summary_from_parse(str(path), *LIMITS, [0, 1, 2])
+    summary = _ext.summary_from_parse(str(path), *SCANNER, [0, 1, 2])
     sequence = pp.Sequence()
     sequence.read(path)
     return (

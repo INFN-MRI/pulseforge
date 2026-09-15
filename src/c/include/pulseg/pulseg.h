@@ -27,9 +27,6 @@
 #include "pulseg_io.h"
 #include "pulseg_convert.h"
 #include "pulseg_collection.h"
-#include "pulseg_safety.h"
-#include "pulseg_waveforms.h"
-#include "pulseg_chunk.h"
 #include "pulseg_cache.h"
 
 #include "pulseg_protocol.h"

@@ -16,41 +16,25 @@
 /*  Opts init                                                         */
 /* ================================================================== */
 
-void pulseg_opts_init_full(
+void pulseg_opts_init(
     pulseg_opts *opts,
     float gamma_hz_per_t,
     float b0_t,
-    float max_grad_hz_per_m,
-    float max_slew_hz_per_m_per_s,
     float rf_raster_us,
     float grad_raster_us,
     float adc_raster_us,
-    float block_raster_us,
-    float peak_log10_threshold,
-    float peak_norm_scale,
-    float peak_eps)
+    float block_raster_us)
 {
-    int i;
     if (!opts)
         return;
 
-    opts->has_prescription_rotation = 0;
-    for (i = 0; i < 9; ++i)
-        opts->prescription_rotation[i] = (i % 4 == 0) ? 1.0f : 0.0f;
-    opts->mech_memory_us = 20000.0f;
     opts->vendor = PULSEG_VENDOR;
     opts->gamma_hz_per_t = gamma_hz_per_t;
     opts->b0_t = b0_t;
-    opts->max_grad_hz_per_m = max_grad_hz_per_m;
-    opts->max_slew_hz_per_m_per_s = max_slew_hz_per_m_per_s;
     opts->rf_raster_us = rf_raster_us;
     opts->grad_raster_us = grad_raster_us;
     opts->adc_raster_us = adc_raster_us;
     opts->block_raster_us = block_raster_us;
-    opts->peak_log10_threshold = peak_log10_threshold;
-    opts->peak_norm_scale = peak_norm_scale;
-    opts->peak_eps = peak_eps;
-    opts->peak_prominence = PULSEG_PEAK_PROMINENCE_DEFAULT;
     opts->vendor_rf_stats_fn = NULL;
     opts->vendor_rf_stats_ctx = NULL;
     opts->label_column_map[0] = 0; /* identity default: SLC, PHS, REP; */
@@ -61,36 +45,8 @@ void pulseg_opts_init_full(
     opts->vendor_section_write_fn = NULL;
     opts->vendor_section_ctx = NULL;
     opts->allow_variable_rf_amplitude = 1;
-    opts->parallel_for_fn = NULL;
-    opts->parallel_ctx = NULL;
     opts->structure_only = 0;
     opts->borrow_buffer_shapes = 0;
-}
-
-void pulseg_opts_init(
-    pulseg_opts *opts,
-    float gamma_hz_per_t,
-    float b0_t,
-    float max_grad_hz_per_m,
-    float max_slew_hz_per_m_per_s,
-    float rf_raster_us,
-    float grad_raster_us,
-    float adc_raster_us,
-    float block_raster_us)
-{
-    pulseg_opts_init_full(
-        opts,
-        gamma_hz_per_t,
-        b0_t,
-        max_grad_hz_per_m,
-        max_slew_hz_per_m_per_s,
-        rf_raster_us,
-        grad_raster_us,
-        adc_raster_us,
-        block_raster_us,
-        PULSEG_PEAK_LOG10_THRESHOLD_DEFAULT,
-        PULSEG_PEAK_NORM_SCALE_DEFAULT,
-        PULSEG_PEAK_EPS_DEFAULT);
 }
 
 void pulseg_opts_get_design_raster(pulseq_raster *raster, const pulseg_opts *opts)
