@@ -1,5 +1,5 @@
 /**
- * @file pulseg_dedup.c
+ * @file dedup.cpp
  * @brief Event deduplication: raw pulseq libraries -> unique definitions
  *        plus per-block instance tables.
  *
@@ -15,11 +15,16 @@
 #include <stdlib.h>
 #include <math.h>
 
+/* The passes keep C linkage: the collection is assembled in C, which
+ * calls them by the names pulseg_internal.h declares. */
+extern "C"
+{
 #include "pulseg_internal.h"
 #include "pulseg.h"
 /* The RF spectrum lives at the pulseq level -- pulseg links pulseq, and both
  * this and pulseq's own slice-thickness derivation need the same transform. */
 #include "pulseq_rf.h"
+}
 
 /* ================================================================== */
 /*  File-scope constants                                              */
@@ -168,8 +173,8 @@ static int deduplicate_rf_library(
     if (num_rows <= 0)
         return 0;
 
-    int_rows = PULSEG_ALLOC(num_rows * sizeof(*int_rows));
-    params = PULSEG_ALLOC(num_rows * sizeof(*params));
+    int_rows = (int(*)[RF_DEF_COLS])PULSEG_ALLOC(num_rows * sizeof(*int_rows));
+    params = (float(*)[RF_PARAMS_COLS])PULSEG_ALLOC(num_rows * sizeof(*params));
     unique_defs = (int *)PULSEG_ALLOC(num_rows * sizeof(int));
     event_table = (int *)PULSEG_ALLOC(num_rows * sizeof(int));
     if (!int_rows || !params || !unique_defs || !event_table)
@@ -294,7 +299,7 @@ static int deduplicate_grad_library(
     if (num_rows <= 0)
         return 0;
 
-    int_rows = PULSEG_ALLOC(num_rows * sizeof(*int_rows));
+    int_rows = (int(*)[GRAD_DEF_COLS])PULSEG_ALLOC(num_rows * sizeof(*int_rows));
     params = (float *)PULSEG_ALLOC(num_rows * sizeof(float));
     unique_defs = (int *)PULSEG_ALLOC(num_rows * sizeof(int));
     event_table = (int *)PULSEG_ALLOC(num_rows * sizeof(int));
@@ -383,8 +388,8 @@ static int deduplicate_adc_library(
     if (num_rows <= 0)
         return 0;
 
-    int_rows = PULSEG_ALLOC(num_rows * sizeof(*int_rows));
-    params = PULSEG_ALLOC(num_rows * sizeof(*params));
+    int_rows = (int(*)[ADC_DEF_COLS])PULSEG_ALLOC(num_rows * sizeof(*int_rows));
+    params = (float(*)[ADC_PARAMS_COLS])PULSEG_ALLOC(num_rows * sizeof(*params));
     unique_defs = (int *)PULSEG_ALLOC(num_rows * sizeof(int));
     event_table = (int *)PULSEG_ALLOC(num_rows * sizeof(int));
     if (!int_rows || !params || !unique_defs || !event_table)
@@ -1889,7 +1894,7 @@ int pulseg__get_unique_blocks(
     }
 
     /* ---- step 2: block definition matrix ---- */
-    int_rows = PULSEG_ALLOC(num_blocks * sizeof(*int_rows));
+    int_rows = (int(*)[BLOCK_DEF_COLS])PULSEG_ALLOC(num_blocks * sizeof(*int_rows));
     unique_defs = (int *)PULSEG_ALLOC(num_blocks * sizeof(int));
     event_table = (int *)PULSEG_ALLOC(num_blocks * sizeof(int));
     if (!int_rows || !unique_defs || !event_table)

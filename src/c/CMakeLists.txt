@@ -39,8 +39,6 @@ set(PULSEG_SOURCES
     core/pulseg_parallel_posix.c
     io/pulseg_opts.c
     io/pulseg_protocol.c
-    structure/pulseg_dedup.c
-    structure/pulseg_structure.c
     structure/pulseg_getters.c
     waveforms/pulseg_waveforms.c
     waveforms/pulseg_chunk.c

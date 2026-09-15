@@ -1,5 +1,5 @@
 /**
- * @file pulseg_structure.c
+ * @file structure.cpp
  * @brief Sequence structure: TR detection, segmentation, execution stream,
  *        and timing anchors.
  *
@@ -15,8 +15,13 @@
 #include <stdlib.h>
 #include <math.h>
 
+/* The passes keep C linkage: the collection is assembled in C, which
+ * calls them by the names pulseg_internal.h declares. */
+extern "C"
+{
 #include "pulseg_internal.h"
 #include "pulseg.h"
+}
 
 /* ================================================================== */
 /*  File-scope constants                                              */
