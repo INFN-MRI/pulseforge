@@ -124,11 +124,16 @@ def _reader_lines(s):
         f"max_adc_samples {s['max_adc_samples']}",
         f"total_readouts {s['total_readouts']}",
     ]
-    lines += [
-        f"subsequence {i} num_trs {x['num_trs']} tr_size {x['tr_size']} "
-        f"num_unique_adcs {x['num_unique_adcs']} num_unique_rf {x['num_unique_rf']}"
-        for i, x in enumerate(s["subsequences"])
-    ]
+    for i, x in enumerate(s["subsequences"]):
+        lines.append(
+            f"subsequence {i} num_trs {x['num_trs']} tr_size {x['tr_size']} "
+            f"num_unique_adcs {x['num_unique_adcs']} num_unique_rf {x['num_unique_rf']}"
+        )
+        lines += [
+            f"group {i} {n} trid {g['trid']} num_instances {g['num_instances']} "
+            f"one_instance_duration_us {g['one_instance_duration_us']}"
+            for n, g in enumerate(x["tr_groups"])
+        ]
     lines += [
         f"segment {i} duration_us {x['duration_us']} num_blocks {x['num_blocks']} "
         f"start_block {x['start_block']} is_nav {x['is_nav']}"

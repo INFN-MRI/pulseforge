@@ -787,17 +787,14 @@ int pulseg_get_tr_groups(
         {
             int blk = pulseg__exec_block_idx(desc, i);
             int mid = desc->block_table[blk].trid;
-            /* A run also breaks at every main-region TR boundary
-             * (exec_stream_tr_start[i]==1), not just on a TRID
-             * transition -- otherwise adjacent NEX/pass repeats of the
-             * same main-region group (identical TRID across the repeat
-             * boundary, since TRID is sticky and the author never re-SETs
-             * it) would silently merge into one giant run instead of being
-             * counted as separate occurrences. */
-            int is_tr_start = pulseg__exec_tr_start(desc, i);
-            if (mid != 0 && (mid != prev_mid || is_tr_start))
+            /* The label is the boundary: an occurrence starts where the
+             * sequence SETs TRID, which an author writes at the head of every
+             * repetition, and runs until the next SET. Two neighbouring
+             * repetitions of one group therefore stay two occurrences even
+             * though the sticky value never changes across them. */
+            int sets_trid = desc->block_table[blk].trid_set;
+            if (mid != 0 && (sets_trid || mid != prev_mid))
             {
-                /* New run starts here. */
                 run_trid[num_runs] = mid;
                 run_start[num_runs] = i;
                 run_len[num_runs] = 0;

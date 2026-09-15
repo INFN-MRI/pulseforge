@@ -82,6 +82,32 @@ void require(int code, const char *what)
         throw std::invalid_argument(std::string(what) + " failed: error " + std::to_string(code));
 }
 
+/* The TRID-labelled groups of one subsequence, in first-seen order. */
+py::list tr_groups(const pulseg_collection *coll, int subseq_idx)
+{
+    pulseg_tr_group *groups = NULL;
+    const int count = pulseg_get_tr_groups(coll, &groups, subseq_idx);
+    if (count < 0)
+    {
+        if (groups)
+            PULSEG_FREE(groups);
+        require(count, "TR groups");
+    }
+    py::list out;
+    for (int i = 0; i < count; ++i)
+    {
+        py::dict entry;
+        entry["trid"] = groups[i].trid;
+        entry["num_instances"] = groups[i].num_instances;
+        entry["one_instance_duration_us"] = groups[i].one_instance_duration_us;
+        entry["total_duration_us"] = groups[i].total_duration_us;
+        out.append(entry);
+    }
+    if (groups)
+        PULSEG_FREE(groups);
+    return out;
+}
+
 py::dict summarize(const pulseg_collection *coll)
 {
     pulseg_collection_info info = PULSEG_COLLECTION_INFO_INIT;
@@ -100,6 +126,7 @@ py::dict summarize(const pulseg_collection *coll)
         entry["num_unique_rf"] = s.num_unique_rf;
         entry["num_canonical_trs"] = s.num_canonical_trs;
         entry["num_tr_instances"] = s.num_tr_instances;
+        entry["tr_groups"] = tr_groups(coll, i);
         subsequences.append(entry);
     }
 
