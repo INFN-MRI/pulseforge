@@ -323,3 +323,79 @@ def test_connection_with_savedata(tmp_path):
     finally:
         peer.close()
         _safe_close(conn)
+
+
+MINIMAL_HEADER = (
+    '<?xml version="1.0"?>'
+    '<ismrmrdHeader xmlns="http://www.ismrm.org/ISMRMRD">'
+    "<experimentalConditions>"
+    "<H1resonanceFrequency_Hz>63500000</H1resonanceFrequency_Hz>"
+    "</experimentalConditions>"
+    "</ismrmrdHeader>"
+)
+
+
+def _connection_pair() -> tuple[Connection, Connection]:
+    left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    return Connection(left), Connection(right)
+
+
+def test_a_config_and_a_header_arrive_as_the_peer_reads_them():
+    writer, reader_socket = _make_connection_pair()
+    try:
+        writer.send_config('{"parameters": {"config": "demo"}}')
+        writer.send_header(MINIMAL_HEADER)
+        reader = Connection(reader_socket, auto_read_config_header=True)
+        assert reader.config["parameters"]["config"] == "demo"
+        assert reader.header.experimentalConditions.H1resonanceFrequency_Hz == 63500000
+    finally:
+        reader_socket.close()
+        _safe_close(writer)
+
+
+def test_a_parsed_header_is_sent_as_the_document_it_came_from():
+    writer, reader_socket = _make_connection_pair()
+    try:
+        writer.send_config("")
+        writer.send_header(MINIMAL_HEADER)
+        reader = Connection(reader_socket, auto_read_config_header=True)
+        writer.send_header(reader.header)
+        _mid, returned = reader.next()
+        assert (
+            returned.experimentalConditions.H1resonanceFrequency_Hz
+            == reader.header.experimentalConditions.H1resonanceFrequency_Hz
+        )
+    finally:
+        reader_socket.close()
+        _safe_close(writer)
+
+
+def test_sending_close_ends_sending_but_leaves_the_stream_readable():
+    sender, receiver = _connection_pair()
+    try:
+        sender.send_close()
+        _mid, marker = receiver.next()
+        assert marker.isFlagSet(ismrmrd.ACQ_LAST_IN_MEASUREMENT)
+        with pytest.raises(ValueError):
+            sender.send("late")
+        receiver.send("an answer after the close")
+        assert sender.next()[1] == "an answer after the close"
+    finally:
+        _safe_close(receiver)
+        _safe_close(sender)
+
+
+def test_a_peer_that_closes_mid_message_ends_the_stream():
+    conn, peer = _make_connection_pair()
+    try:
+        peer.sendall(
+            constants.GadgetMessageIdentifier.pack(
+                constants.GADGET_MESSAGE_ISMRMRD_ACQUISITION
+            )
+        )
+        peer.close()
+        with pytest.raises(StopIteration):
+            conn.next()
+        assert conn.is_exhausted
+    finally:
+        _safe_close(conn)

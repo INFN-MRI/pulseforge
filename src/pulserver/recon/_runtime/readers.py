@@ -1,6 +1,7 @@
 """Readers for MRD streaming messages; each takes a source with ``read(nbytes)``."""
 
 __all__ = [
+    "deserialize_config",
     "read",
     "read_acquisition",
     "read_acquisition_header",
@@ -32,6 +33,7 @@ import struct
 import xml.etree.ElementTree as xml
 from collections.abc import Callable
 from typing import Any
+from xml.parsers import expat
 
 import ismrmrd
 import numpy as np
@@ -173,13 +175,14 @@ def read_config_text(source: Any) -> Any:
     """Read a length-prefixed config text and parse it.
 
     Parsers are tried in order JSON, YAML, XML, each only when installed; the
-    first that accepts the text wins, and a Gadgetron ``RECON`` mapping is
-    translated by :func:`_gadgetron2mrd`. Text no parser accepts yields
-    ``{"parameters": {"config": "default"}}``.
+    first that reads the text as a mapping wins, and a Gadgetron ``RECON``
+    mapping is translated by :func:`_gadgetron2mrd`. Text no parser reads as a
+    mapping, empty text included, yields ``{"parameters": {"config":
+    "default"}}``.
     """
     length = read(source, constants.uint32)
     content = source.read(length).decode("utf-8").rstrip("\x00")
-    return _deserialize_config(content, "default")
+    return deserialize_config(content, "default")
 
 
 def read_config_file(source: Any) -> str:
@@ -210,25 +213,28 @@ def _xml_postprocessor(_path, key, value):
 
 def _gadgetron2mrd(config: Any) -> Any:
     """Map ``{"RECON": {"cmd": c, ...}}`` to ``{"parameters": {"config": c, ...}}``; other input unchanged."""
-    if "RECON" in config:
+    if isinstance(config, dict) and "RECON" in config:
         cmd = config["RECON"].pop("cmd")
         return {"parameters": {"config": cmd, **config["RECON"]}}
     return config
 
 
-def _deserialize_config(content: str, default_config: str = "default") -> Any:
+def deserialize_config(content: str, default_config: str = "default") -> Any:
+    """Parse a config text as :func:`read_config_text` documents it."""
     try:
         config_dict = json.loads(content)
-        logging.debug("Parsed config as JSON")
-        return _gadgetron2mrd(config_dict)
+        if isinstance(config_dict, dict):
+            logging.debug("Parsed config as JSON")
+            return _gadgetron2mrd(config_dict)
     except json.JSONDecodeError:
         pass
 
     if HAS_YAML:
         try:
             config_dict = yaml.safe_load(content)
-            logging.debug("Parsed config as YAML")
-            return _gadgetron2mrd(config_dict)
+            if isinstance(config_dict, dict):
+                logging.debug("Parsed config as YAML")
+                return _gadgetron2mrd(config_dict)
         except yaml.YAMLError:
             pass
     else:
@@ -237,9 +243,10 @@ def _deserialize_config(content: str, default_config: str = "default") -> Any:
     if HAS_XMLTODICT:
         try:
             config_dict = xmltodict.parse(content, postprocessor=_xml_postprocessor)
-            logging.debug("Parsed config as XML")
-            return _gadgetron2mrd(config_dict)
-        except xml.ParseError:
+            if isinstance(config_dict, dict):
+                logging.debug("Parsed config as XML")
+                return _gadgetron2mrd(config_dict)
+        except (xml.ParseError, expat.ExpatError):
             pass
 
     logging.warning(

@@ -30,7 +30,9 @@ from .readers import (
 )
 from .writers import (
     write_acquisition,
+    write_config_text,
     write_dicom,
+    write_header,
     write_image,
     write_text,
     write_waveform,
@@ -160,8 +162,8 @@ class Connection:
     Reading ends at a CLOSE message, at an acquisition flagged
     ``ACQ_LAST_IN_MEASUREMENT``, at a message with no reader, or when the peer
     resets. CLOSE is delivered as an empty acquisition flagged
-    ``ACQ_LAST_IN_MEASUREMENT``. Sending stays open until
-    :meth:`shutdown_close`, so outputs can follow the peer's CLOSE.
+    ``ACQ_LAST_IN_MEASUREMENT``. Sending stays open until :meth:`send_close`
+    or :meth:`shutdown_close`, so outputs can follow the peer's CLOSE.
 
     Parameters
     ----------
@@ -184,10 +186,21 @@ class Connection:
             self.socket.settimeout(None)
 
         def read(self, nbytes: int) -> bytes:
-            """Read exactly ``nbytes``."""
+            """Read exactly ``nbytes``.
+
+            Raises
+            ------
+            ConnectionResetError
+                If the peer closes before the whole message arrives.
+            """
             data = self.socket.recv(nbytes, socket.MSG_WAITALL)
             while len(data) < nbytes:
-                data += self.socket.recv(nbytes - len(data), socket.MSG_WAITALL)
+                received = self.socket.recv(nbytes - len(data), socket.MSG_WAITALL)
+                if not received:
+                    raise ConnectionResetError(
+                        f"the peer closed {nbytes - len(data)} bytes into a message"
+                    )
+                data += received
             return data
 
         def write(self, byte_array: bytes) -> None:
@@ -209,7 +222,10 @@ class Connection:
         auto_read_config_header: bool = False,
     ) -> None:
         self.socket = Connection.SocketWrapper(socket)
-        self.lock = threading.Lock()
+        # Reading and sending lock separately: a proxy reads one peer while
+        # another thread sends that peer the results of the first.
+        self._read_lock = threading.Lock()
+        self._send_lock = threading.Lock()
 
         if savedata:
             self.saver = DataSaver(savedataFile, savedataFolder, savedataGroup)
@@ -307,7 +323,7 @@ class Connection:
             error = ValueError("Cannot send on a closed connection.")
             logging.error(error)
             raise error
-        with self.lock:
+        with self._send_lock:
             for predicate, writer in self.writers:
                 if predicate(item):
                     item_identifier = item.__class__.__name__
@@ -347,7 +363,7 @@ class Connection:
         StopIteration
             When reading has ended.
         """
-        with self.lock:
+        with self._read_lock:
             if self.is_exhausted:
                 raise StopIteration
             try:
@@ -365,16 +381,50 @@ class Connection:
             except StopIteration:
                 self.is_exhausted = True
                 raise
+            except ConnectionResetError as error:
+                logging.error("Connection closed mid-message: %s", error)
+                self.is_exhausted = True
+                raise StopIteration from error
+
+    def send_config(self, text: str) -> None:
+        """Send a config text message, which a peer reads ahead of the header."""
+        self._send_raw(write_config_text, text)
+
+    def send_header(self, header: Any) -> None:
+        """Send an MRD XML header message, from a parsed header or its document."""
+        self._send_raw(write_header, header)
+
+    def send_close(self) -> None:
+        """Send CLOSE and stop sending; the socket stays open, so results still arrive.
+
+        Ends what this side sends, as :meth:`shutdown_close` does, without
+        ending what it reads.
+        """
+        with self._send_lock:
+            if self._send_closed:
+                return
+            self._send_closed = True
+            with contextlib.suppress(OSError):
+                self.socket.write(
+                    constants.GadgetMessageIdentifier.pack(
+                        constants.GADGET_MESSAGE_CLOSE
+                    )
+                )
+        logging.info("--> Sending GADGET_MESSAGE_CLOSE")
 
     def shutdown_close(self) -> None:
         """Send CLOSE, then shut down and close the socket; ends reading and sending.
 
         CLOSE goes first: the Orchestra client connector waits for it and does
-        not return on a bare TCP close.
+        not return on a bare TCP close. A connection already closed for sending
+        does not send a second CLOSE.
         """
-        with contextlib.suppress(OSError):
-            end = constants.GadgetMessageIdentifier.pack(constants.GADGET_MESSAGE_CLOSE)
-            self.socket.socket.sendall(end)
+        if not self._send_closed:
+            with contextlib.suppress(OSError):
+                end = constants.GadgetMessageIdentifier.pack(
+                    constants.GADGET_MESSAGE_CLOSE
+                )
+                self.socket.socket.sendall(end)
         with contextlib.suppress(OSError):
             self.socket.socket.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
@@ -382,6 +432,12 @@ class Connection:
         self.is_exhausted = True
         self._send_closed = True
         logging.info("Socket closed")
+
+    def _send_raw(self, writer: Callable[..., None], item: Any) -> None:
+        if self._send_closed:
+            raise ValueError("Cannot send on a closed connection.")
+        with self._send_lock:
+            writer(self.socket, item)
 
     def _peek_message_identifier(self) -> int | None:
         try:

@@ -5,7 +5,9 @@ __all__ = [
     "write_acquisition_header",
     "write_array",
     "write_byte_string",
+    "write_config_text",
     "write_dicom",
+    "write_header",
     "write_image",
     "write_image_header",
     "write_object_array",
@@ -160,3 +162,24 @@ def write_text(destination: Any, contents: str) -> None:
     contents_with_nul = f"{contents}\0"
     destination.write(constants.uint32.pack(len(contents_with_nul.encode())))
     destination.write(contents_with_nul.encode())
+
+
+def write_config_text(destination: Any, contents: str) -> None:
+    """Write a config text message; a NUL is appended and counted in the length."""
+    destination.write(
+        constants.GadgetMessageIdentifier.pack(constants.GADGET_MESSAGE_CONFIG)
+    )
+    contents_with_nul = f"{contents}\0".encode()
+    destination.write(constants.uint32.pack(len(contents_with_nul)))
+    destination.write(contents_with_nul)
+
+
+def write_header(destination: Any, header: Any) -> None:
+    """Write an MRD XML header message, from an ``ismrmrd.xsd`` header or its document."""
+    destination.write(
+        constants.GadgetMessageIdentifier.pack(constants.GADGET_MESSAGE_HEADER)
+    )
+    document = header if isinstance(header, (str, bytes)) else header.toXML("utf-8")
+    write_byte_string(
+        destination, document.encode() if isinstance(document, str) else document
+    )

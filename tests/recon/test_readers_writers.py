@@ -8,6 +8,7 @@ import numpy as np
 
 from pulserver.recon._runtime import constants
 from pulserver.recon._runtime.readers import (
+    deserialize_config,
     read,
     read_acquisition,
     read_byte_string,
@@ -169,3 +170,13 @@ def test_waveform_roundtrip():
 
     assert result.data.shape == (3, 100)
     np.testing.assert_array_equal(result.data, wav.data)
+
+
+def test_a_config_text_no_parser_reads_as_a_mapping_falls_back_to_the_default():
+    assert deserialize_config("") == {"parameters": {"config": "default"}}
+    assert deserialize_config("gre2d", "") == {"parameters": {"config": ""}}
+
+
+def test_a_gadgetron_config_becomes_the_parameters_the_runtime_reads():
+    text = '{"RECON": {"cmd": "gre2d", "slices": 3}}'
+    assert deserialize_config(text) == {"parameters": {"config": "gre2d", "slices": 3}}
